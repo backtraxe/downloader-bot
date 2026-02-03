@@ -1,0 +1,6 @@
+asyncio
+glob
+telegram
+python-dotenv
+python-telegram-bot 
+yt-dlp
