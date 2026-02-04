@@ -2,6 +2,9 @@ import os
 import logging
 import asyncio
 import glob
+import math
+import subprocess
+import json
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters
 import yt_dlp
@@ -31,6 +34,84 @@ logging.basicConfig(
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
+def get_video_info(file_path):
+    """获取视频时长(秒)"""
+    try:
+        cmd = [
+            'ffprobe', 
+            '-v', 'error', 
+            '-show_entries', 'format=duration', 
+            '-of', 'default=noprint_wrappers=1:nokey=1', 
+            file_path
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return float(result.stdout.strip())
+    except Exception as e:
+        print(f"获取视频信息失败: {e}")
+        return None
+
+def split_video(file_path, file_prefix):
+    """
+    如果视频大于 50MB，将其切割为多个小片段。
+    返回文件路径列表。
+    """
+    file_size = os.path.getsize(file_path)
+    limit_bytes = 49 * 1024 * 1024  # 限制为 49MB (留点余量)
+    
+    # 如果文件小于 49MB，直接返回原文件
+    if file_size <= limit_bytes:
+        return [file_path]
+
+    print(f"文件大小 {file_size/1024/1024:.2f}MB，正在进行切割...")
+    
+    duration = get_video_info(file_path)
+    if not duration:
+        return [file_path] # 获取时长失败，尝试原样发送
+
+    # 计算预期的片段数量
+    # 假设比特率是均匀的（虽然不一定，但为了速度我们使用估算）
+    num_parts = math.ceil(file_size / limit_bytes)
+    
+    # 计算每段的大致时长 (总时长 / 片段数)
+    segment_time = int(duration / num_parts)
+    
+    # 防止切得太细，最少 10 秒
+    if segment_time < 10: 
+        segment_time = 10
+
+    output_pattern = f"{os.path.dirname(file_path)}/{file_prefix}_part%03d.mp4"
+    
+    # 使用 FFmpeg 进行切割
+    # -c copy: 直接流复制，不重新编码 (速度极快，画质无损)
+    # -segment_time: 每段时长
+    # -reset_timestamps 1: 重置时间戳，保证每一段都能独立播放
+    cmd = [
+        'ffmpeg', '-y',
+        '-i', file_path,
+        '-c', 'copy',
+        '-map', '0',
+        '-f', 'segment',
+        '-segment_time', str(segment_time),
+        '-reset_timestamps', '1',
+        output_pattern
+    ]
+    
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # 查找生成的分段文件
+        parts = sorted(glob.glob(f"{os.path.dirname(file_path)}/{file_prefix}_part*.mp4"))
+        
+        # 切割成功后，删除原大文件
+        if parts:
+            os.remove(file_path)
+            return parts
+        else:
+            return [file_path] # 切割失败返回原文件
+            
+    except subprocess.CalledProcessError:
+        return [file_path] # 出错返回原文件
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("你好！请直接发送包含视频/图片的 URL 给我就行。支持 Youtube, B站, 抖音, 小红书, X, Ins 等。")
 
@@ -44,71 +125,79 @@ async def process_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     message_id = update.message.message_id
     
-    # 简单的 URL 校验
     if not url.startswith(("http://", "https://")):
-        return # 忽略非链接消息
+        return
 
     status_msg = await update.message.reply_text("🔍 正在解析并下载，请稍候...")
 
-    # 为每个请求创建一个唯一的文件前缀，防止冲突
     file_prefix = f"{user_id}_{message_id}"
-    output_template = f"{DOWNLOAD_DIR}/{file_prefix}_%(title)s.%(ext)s"
+    # 注意：这里我们强制后缀为 mp4，方便 ffmpeg 处理
+    output_template = f"{DOWNLOAD_DIR}/{file_prefix}_raw.%(ext)s"
 
     ydl_opts = {
         'outtmpl': output_template,
-        'format': 'bestvideo+bestaudio/best', # 下载最佳画质
-        'merge_output_format': 'mp4',         # 尽量合并为 mp4
-        'noplaylist': True,                   # 不下载整个列表
-        'quiet': True,                        # 减少日志输出
-        'no_warnings': True,
-        'progress_hooks': [progress_hook],
-        # 限制文件大小 (Telegram 普通 Bot 上限 50MB，此处设大一点尝试发送，失败则提示)
-        # 'max_filesize': 50 * 1024 * 1024, 
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'merge_output_format': 'mp4',
+        'noplaylist': True,
+        'quiet': True,
+        # 'max_filesize': 不要限制下载大小，我们要下载下来自己切
     }
 
-    # 如果有 cookies.txt，则加载
     if os.path.exists(COOKIES_FILE):
         ydl_opts['cookiefile'] = COOKIES_FILE
 
     try:
-        # 在单独的线程中运行下载，避免阻塞 asyncio 事件循环
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, download_media, ydl_opts, url)
 
-        # 查找下载的文件 (因为 yt-dlp 可能会自动修改扩展名)
-        downloaded_files = glob.glob(f"{DOWNLOAD_DIR}/{file_prefix}_*")
+        # 查找下载的原始文件
+        # 注意：yt-dlp 可能会把 ext 变成 mkv 等，所以我们要模糊匹配 _raw.*
+        downloaded_raw_files = glob.glob(f"{DOWNLOAD_DIR}/{file_prefix}_raw.*")
 
-        if not downloaded_files:
-            await status_msg.edit_text("❌ 下载失败：未找到文件。可能是该平台不支持或需要 Cookie。")
+        if not downloaded_raw_files:
+            await status_msg.edit_text("❌ 下载失败：未找到文件。")
             return
+        
+        raw_file_path = downloaded_raw_files[0]
+        
+        # --- 核心修改：调用切割逻辑 ---
+        # 如果是图片，split_video 会直接返回列表；如果是视频且过大，会切割
+        if raw_file_path.endswith(('.jpg', '.jpeg', '.png', '.webp')):
+            final_files = [raw_file_path]
+        else:
+            # 在线程池中运行切割，防止卡住 Bot
+            await status_msg.edit_text("✂️ 文件较大，正在切割中...")
+            final_files = await loop.run_in_executor(None, split_video, raw_file_path, file_prefix)
 
-        # 发送文件
-        for file_path in downloaded_files:
+        # --- 循环发送所有文件 ---
+        total_parts = len(final_files)
+        for index, file_path in enumerate(final_files):
             file_size = os.path.getsize(file_path)
-            # Telegram Bot API 限制普通发送为 50MB
-            if file_size > 49 * 1024 * 1024:
-                await status_msg.reply_text(f"⚠️ 文件过大 ({file_size/1024/1024:.2f} MB)，无法通过 Bot 直接发送。建议在本地使用工具下载。")
+            
+            # 进度提示
+            if total_parts > 1:
+                await status_msg.edit_text(f"⬆️ 正在上传第 {index+1}/{total_parts} 部分...")
             else:
                 await status_msg.edit_text(f"⬆️ 正在上传...")
-                if file_path.endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                    await update.message.reply_photo(photo=open(file_path, 'rb'))
-                else:
-                    await update.message.reply_video(video=open(file_path, 'rb'))
+
+            # 最后的防线：如果切完还大于 50MB (极少见)，只能提示
+            if file_size > 49.5 * 1024 * 1024:
+                await update.message.reply_text(f"⚠️ 第 {index+1} 部分仍然过大 ({file_size/1024/1024:.1f}MB)，无法发送。")
+            else:
+                with open(file_path, 'rb') as f:
+                    if file_path.endswith(('.jpg', '.jpeg', '.png', '.webp')):
+                        await update.message.reply_photo(photo=f)
+                    else:
+                        await update.message.reply_video(video=f, caption=f"Part {index+1}/{total_parts}" if total_parts > 1 else "")
             
-            # 清理文件
+            # 发送完立即删除分片
             os.remove(file_path)
 
         await status_msg.delete()
 
     except Exception as e:
-        error_text = str(e)
-        # 简化错误信息
-        if "Sign in to confirm your age" in error_text:
-            msg = "❌ 下载失败：需登录 (年龄限制/会员内容)。请配置 cookies.txt。"
-        else:
-            msg = f"❌ 发生错误: {error_text[:100]}..."
-        await status_msg.edit_text(msg)
-        # 清理可能残留的文件
+        await status_msg.edit_text(f"❌ 发生错误: {str(e)[:100]}")
+        # 清理残留
         for f in glob.glob(f"{DOWNLOAD_DIR}/{file_prefix}_*"):
             try: os.remove(f)
             except: pass
