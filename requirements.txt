@@ -3,3 +3,5 @@ telegram
 python-dotenv
 python-telegram-bot 
 yt-dlp
+beautifulsoup4
+requests
