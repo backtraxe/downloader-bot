@@ -1,0 +1,155 @@
+# -*- coding: utf-8 -*-
+"""统一媒体下载入口。
+
+支持 bilibili / douyin / youtube / instagram / x(twitter) 等站点，
+底层由 yt-dlp 统一接管。按 URL 自动识别站点，从 cookies/<site>.txt 读取 Cookie。
+
+用法：
+    python downloader.py
+然后反复输入链接下载，输入 q 退出。
+"""
+import os
+import sys
+
+import yt_dlp
+from yt_dlp.utils import DownloadError
+
+from sites import (
+    SITE_REQUIRE_COOKIE,
+    cookie_file_for,
+    get_site_name,
+)
+from utils import sanitize_filename, setup_logging
+
+logger = setup_logging()
+
+DOWNLOAD_DIR = "download"
+
+# 需要登录 / 常见失败的错误关键字 → 可读提示
+_LOGIN_HINTS = (
+    "Login required",
+    "login",
+    "cookies",
+    "Sign in",
+    "HTTP Error 401",
+    "Private video",
+    "Age-restricted",
+    "geo",
+    "not available in your country",
+    "blocked",
+)
+
+
+def build_ydl_opts(site_name):
+    """构造 yt-dlp 下载选项。
+
+    cookiefile 指向 cookies/<site>.txt；文件为空时 yt-dlp 会忽略，
+    由调用方在下载前提示用户是否需要填写 Cookie。
+    """
+    cookie_path = cookie_file_for(site_name)
+    # 空文件 / 不存在都不传 cookiefile，避免 yt-dlp 警告
+    cookiefile = None
+    if os.path.exists(cookie_path) and os.path.getsize(cookie_path) > 0:
+        cookiefile = cookie_path
+
+    return {
+        # 输出路径：download/<site>/<标题>.<ext>
+        "outtmpl": os.path.join(DOWNLOAD_DIR, site_name, "%(title).200B.%(ext)s"),
+        # 视频音频合并为 mp4
+        "merge_output_format": "mp4",
+        # 分片并发
+        "concurrent_fragment_downloads": 3,
+        # 不让 yt-dlp 自己打印，统一走我们的 logger
+        "quiet": True,
+        "noprogress": True,
+        "no_warnings": True,
+        # cookie
+        "cookiefile": cookiefile,
+        # 文件名冲突不覆盖：yt-dlp 自带带序号后缀
+        "nopart": False,
+        "progress_hooks": [_on_progress],
+    }
+
+
+def _on_progress(d):
+    """yt-dlp 进度回调，转成日志。"""
+    status = d.get("status")
+    if status == "downloading":
+        # 已下载 / 总量，避免刷屏，只在显著进度时记一条 debug
+        logger.debug("下载中: %s", d.get("filename", ""))
+    elif status == "finished":
+        logger.info("✅ 完成: %s", os.path.basename(d.get("filename", "")))
+    elif status == "error":
+        logger.error("❌ 出错: %s", d.get("filename", ""))
+
+
+def diagnose_error(err_msg):
+    """把 yt-dlp 的错误信息翻译成可读提示。返回 (kind, message)。"""
+    low = (err_msg or "").lower()
+    if any(k.lower() in low for k in _LOGIN_HINTS):
+        return "need_login", "该内容可能需要登录或 Cookie 失效，请检查 cookies/<站点>.txt"
+    return "unknown", err_msg
+
+
+def download_url(url):
+    """下载单个 URL。自动识别站点并应用对应 cookie。"""
+    site_name = get_site_name(url)
+    if site_name not in SITE_REQUIRE_COOKIE:
+        logger.warning("未识别的站点 %s，仍尝试用 yt-dlp 解析（cookie 按 %s 命名）。",
+                       site_name, cookie_file_for(site_name))
+    else:
+        logger.info("识别站点: %s（Cookie: %s）", site_name, SITE_REQUIRE_COOKIE[site_name])
+
+    # 提示 cookie 状态
+    cookie_path = cookie_file_for(site_name)
+    if not os.path.exists(cookie_path) or os.path.getsize(cookie_path) == 0:
+        if SITE_REQUIRE_COOKIE.get(site_name) == "强烈建议":
+            logger.warning("⚠️ %s 强烈建议填写 Cookie（cookies/%s.txt），否则大概率失败。",
+                           site_name, site_name)
+
+    opts = build_ydl_opts(site_name)
+    logger.info("开始下载: %s", url)
+
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            # 先 extract 校验 URL 是否可达，失败给出明确原因
+            info = ydl.extract_info(url, download=True)
+            title = sanitize_filename(info.get("title", "untitled")) if info else "untitled"
+            logger.info("🎉 下载完成: %s", title)
+            return True
+    except DownloadError as e:
+        kind, msg = diagnose_error(str(e))
+        if kind == "need_login":
+            logger.error("❌ 下载失败（需登录）: %s", msg)
+        else:
+            logger.error("❌ 下载失败: %s", msg)
+        return False
+    except Exception as e:  # noqa: BLE001 顶层兜底，避免 prompt 循环中断
+        logger.error("❌ 意外错误: %s", e)
+        return False
+
+
+def main():
+    logger.info("🚀 统一下载器（yt-dlp）支持: youtube / bilibili / douyin / instagram / x 等")
+    logger.info("输入 q 退出")
+    while True:
+        try:
+            target_url = input("\n🔗 请输入链接: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n👋 退出程序")
+            break
+
+        if target_url.lower() == "q":
+            logger.info("退出程序")
+            break
+        if not target_url:
+            continue
+        if not target_url.startswith("http"):
+            logger.warning("链接需以 http:// 或 https:// 开头")
+            continue
+
+        download_url(target_url)
+
+
+if __name__ == "__main__":
+    main()

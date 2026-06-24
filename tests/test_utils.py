@@ -6,6 +6,7 @@ import threading
 import pytest
 
 from utils import (
+    cookie_header_to_netscape,
     guess_extension,
     normalize_url,
     sanitize_filename,
@@ -138,3 +139,49 @@ class TestUniquePath:
             f.write(b"data")
         out2 = unique_path(str(p))
         assert out2 != out1
+
+
+# ---------------- cookie_header_to_netscape ----------------
+
+class TestCookieHeaderToNetscape:
+    def test_basic_conversion(self):
+        header = "SID=abc123; LOGIN_INFO=xyz; __Secure-1PSID=tok"
+        out = cookie_header_to_netscape(header, domain=".youtube.com")
+        assert out.startswith("# Netscape HTTP Cookie File")
+        lines = [l for l in out.splitlines() if l and not l.startswith("#")]
+        assert len(lines) == 3
+        for line in lines:
+            parts = line.split("\t")
+            assert len(parts) == 7
+            assert parts[0] == ".youtube.com"
+
+    def test_strips_empty_pairs(self):
+        header = "a=1;; ;b=2;"
+        out = cookie_header_to_netscape(header, ".x.com")
+        lines = [l for l in out.splitlines() if l and not l.startswith("#")]
+        assert len(lines) == 2
+
+    def test_empty_input(self):
+        out = cookie_header_to_netscape("", ".x.com")
+        assert out.startswith("# Netscape HTTP Cookie File")
+        # 仅头注释，无 cookie 行
+        assert len([l for l in out.splitlines() if l and not l.startswith("#")]) == 0
+
+    def test_value_with_equals_sign(self):
+        # value 内含 = 不应被错误拆分
+        header = "token=abc==def"
+        out = cookie_header_to_netscape(header, ".x.com")
+        lines = [l for l in out.splitlines() if l and not l.startswith("#")]
+        assert len(lines) == 1
+        name, value = lines[0].split("\t")[5], lines[0].split("\t")[6]
+        assert name == "token"
+        assert value == "abc==def"
+
+    def test_writes_file(self, tmp_path):
+        header = "SESSDATA=abc"
+        out_file = tmp_path / "cookies.txt"
+        cookie_header_to_netscape(header, ".bilibili.com", str(out_file))
+        content = out_file.read_text()
+        assert ".bilibili.com" in content
+        assert "SESSDATA" in content
+
