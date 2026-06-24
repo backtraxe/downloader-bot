@@ -8,17 +8,26 @@ The README ("Telegram bot to download images or videos") is **stale**. The most 
 
 ## Running
 
-Both scripts are interactive prompts (read URLs from stdin until `q`). No CLI args, no build step.
+三个交互式脚本(读 URL 从 stdin 直到 `q`),无 CLI 参数,无构建步骤:
 
 ```bash
 pip install -r requirements.txt
-python 1024_downloader.py   # generic web media scraper
-python xhs_downloader.py   # Xiaohongshu (小红书) media downloader
+python downloader.py       # 多站点统一入口(yt-dlp,推荐)
+python xhs_downloader.py  # 小红书(手写解析)
+python 1024_downloader.py  # 通用网页媒体抓取
 ```
 
-There is no test suite and no linter configured. Verification is manual: run the script, paste a URL, confirm files land in `download/`.
+测试:`pytest -q`(纯函数单测,无网络)。
 
-## The two downloaders
+## The downloaders
+
+**`downloader.py` — 多站点统一入口(推荐)。** 底层用 `yt-dlp` 接管,按 URL 自动识别站点(youtube/bilibili/douyin/instagram/twitter)。流程:`get_site_name(url)` → `cookie_file_for(site)` → `build_ydl_opts`(`cookiefile` 指向 `cookies/<site>.txt`,`outtmpl` = `download/<site>/<title>.<ext>`)→ `YoutubeDL.extract_info(url, download=True)`。yt-dlp 静默(`quiet`/`noprogress`),进度经 `progress_hooks` 转入 `logging`,避免与 logger 输出交错。错误经 `diagnose_error` 翻译成"需登录/Cookie 失效"或原消息。**这是新增站点时的首选入口**——yt-dlp 已覆盖上千站点,通常无需写代码。
+
+**`sites.py` — 站点识别与 Cookie 管理(共用)。** `get_site_name(url)` 把域名映射成统一小写站点名(twitter 含 x.com/t.co),`SITE_REQUIRE_COOKIE` 记录各站点是否建议填 cookie,`load_cookie_for_url`/`cookie_file_for` 按 `cookies/<site>.txt` 加载。被 `downloader.py` 和 `xhs_downloader.py` 共用——**新增站点识别只改这一处**。
+
+**`xhs_downloader.py` — 小红书笔记下载。** 手写解析 `window.__INITIAL_STATE__`(比 yt-dlp 对小红书更可控),流程见下。`get_site_name`/`load_cookie_for_url` 从 `sites.py` 导入,本地不再定义。
+
+**`1024_downloader.py` — 通用静态网站媒体抓取。**
 
 **`1024_downloader.py` — generic static-site media scraper.** Uses `curl_cffi` (not stdlib `requests`) specifically for `impersonate="chrome110"` TLS fingerprinting to bypass anti-hotlink/CDN blocks. Deep-scrapes media from `<img>/<source>/<video>` lazy-load attributes (`data-src`, `data-original`, `data-lazy-src`, `ess-data`, etc.), `<a href>` direct links, and inline `style` `url()` background images. Downloads concurrently (`ThreadPoolExecutor(max_workers=5)`) with per-request `Referer` set to the page URL (the actual anti-hotlink trick) and a random 0.5–1.5s delay to avoid IP bans. Output: `download/<domain>_<title-prefix>/`.
 
