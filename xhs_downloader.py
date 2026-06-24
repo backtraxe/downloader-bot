@@ -6,23 +6,29 @@ import time
 import random
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from fake_useragent import UserAgent
+
+from utils import (
+    init_useragent,
+    normalize_xhs_state_json,
+    sanitize_filename,
+    setup_logging,
+    unique_path,
+)
+
+logger = setup_logging()
 
 COOKIE_DIR = "cookies"
 DOWNLOAD_DIR = "download"
 
 # 初始化 fake_useragent，尽量生成 PC 端的 User-Agent
 # 这样可以确保请求到的是小红书的网页端，从而顺利提取 __INITIAL_STATE__
-try:
-    ua = UserAgent(os='windows')
-except Exception as e:
-    print(f"⚠️ fake_useragent 初始化失败，将使用默认请求头。错误: {e}")
-    ua = None
+ua, _FALLBACK_UA = init_useragent(logger)
+
 
 def get_site_name(url):
     """根据链接解析并归一化网站名称"""
     domain = urlparse(url).netloc.lower()
-    
+
     if "xiaohongshu.com" in domain or "xhslink.com" in domain:
         return "xiaohongshu"
     elif "bilibili.com" in domain or "b23.tv" in domain:
@@ -30,13 +36,16 @@ def get_site_name(url):
     elif "douyin.com" in domain or "v.douyin.com" in domain:
         return "douyin"
     else:
-        parts = domain.split('.')
+        # 未知域名：取最后两段作为站点名；无点/IP 场景用完整 host
+        parts = domain.split(":")[0].split(".")
         if len(parts) >= 2:
             return f"{parts[-2]}.{parts[-1]}"
-        return domain.replace(":", "_")
+        return domain.replace(":", "_") or "unknown"
+
 
 def load_cookie_for_url(url):
-    """根据 URL 自动加载对应的独立 Cookie 文件"""
+    """根据 URL 自动加载对应的独立 Cookie 文件。
+    Cookie 为敏感凭据，仅从 gitignore 的 cookies/ 目录读取。"""
     site_name = get_site_name(url)
     os.makedirs(COOKIE_DIR, exist_ok=True)
     cookie_file = os.path.join(COOKIE_DIR, f"{site_name}.txt")
@@ -44,132 +53,170 @@ def load_cookie_for_url(url):
     if not os.path.exists(cookie_file):
         with open(cookie_file, "w", encoding="utf-8") as f:
             f.write("")
-        print(f"⚠️ 未找到 {site_name} 的 Cookie！")
-        print(f"👉 请在 {cookie_file} 中填入 Cookie 保存后，再尝试下载。\n")
+        logger.warning("未找到 %s 的 Cookie！", site_name)
+        logger.warning("请在 %s 中填入 Cookie 保存后，再尝试下载。", cookie_file)
         return None
 
     with open(cookie_file, "r", encoding="utf-8") as f:
         cookie = f.read().strip()
 
     if not cookie:
-        print(f"⚠️ 文件 {cookie_file} 内容为空！请填入 Cookie 后重试。\n")
+        logger.warning("文件 %s 内容为空！请填入 Cookie 后重试。", cookie_file)
         return None
 
     return cookie
 
+
 def get_headers(cookie):
-    """动态生成请求头，使用 fake_useragent 随机替换 UA"""
-    # 如果 fake-useragent 加载成功则使用随机 UA，否则使用保底 UA
-    user_agent = ua.random if ua else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    
+    """动态生成请求头，使用 fake_useragent 随机替换 UA；不可用时降级固定 UA。"""
+    user_agent = ua.random if ua else _FALLBACK_UA
+
     return {
         "User-Agent": user_agent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Cookie": cookie,
-        "Sec-Ch-Ua-Platform": '"Windows"', 
+        "Sec-Ch-Ua-Platform": '"Windows"',
     }
 
+
 def download_file(session, url, filepath, headers):
-    """单文件下载逻辑，供多线程调用"""
+    """单文件下载逻辑，供多线程调用。文件名冲突时原子去重，绝不覆盖。"""
     try:
         # 引入 0.1 ~ 0.5 秒的随机延迟，防止并发过高被瞬间阻断连接
-        time.sleep(random.uniform(0.1, 0.5)) 
+        time.sleep(random.uniform(0.1, 0.5))
         r = session.get(url, headers=headers, stream=True, timeout=15)
         r.raise_for_status()
-        
-        with open(filepath, 'wb') as f:
+
+        safe_path = unique_path(filepath)
+        with open(safe_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
-        return f"  [成功] -> {os.path.basename(filepath)}"
+        return f"  [成功] -> {os.path.basename(safe_path)}"
     except Exception as e:
         return f"  [失败] {os.path.basename(filepath)} 下载报错: {e}"
+
+
+def extract_video_url(video):
+    """显式、逐层解析视频直链，避免静默吞错。
+    返回 (url, reason)——url 为 None 时 reason 说明原因。"""
+    media = (video or {}).get("media") or {}
+    stream = (media.get("stream") or {})
+    h264_list = stream.get("h264") or []
+    if h264_list and isinstance(h264_list, list):
+        master = (h264_list[0] or {}).get("masterUrl")
+        if master:
+            return master, None
+        return None, "h264 流存在但缺少 masterUrl"
+    # 兜底：直接挂在 video 上的 url
+    direct = video.get("url")
+    if direct:
+        return direct, None
+    return None, "无 stream/h264 也无顶层 url"
+
+
+def detect_risk_control(html, response):
+    """检测小红书风控/验证码。综合文案 + 重定向 + 关键状态判定。"""
+    if not html:
+        return False
+    # 文案兜底（文案可能变化，仅作辅助）
+    if "验证码" in html or "访问过于频繁" in html:
+        return True
+    # 重定向到验证/登录域
+    final_url = (response.url or "").lower() if response is not None else ""
+    if "verify" in final_url or "/login" in final_url or "captcha" in final_url:
+        return True
+    return False
+
 
 def download_xhs_media(url, cookie):
     # 每次解析新链接都生成一个全新的随机 Header
     headers = get_headers(cookie)
-    
+
     # 使用 Session 维持连接池，提高多图下载效率
     session = requests.Session()
 
-    print(f"🔗 正在请求: {url}")
-    print(f"🕵️ 当前伪装 UA: {headers['User-Agent']}")
-    
+    logger.info("正在请求: %s", url)
+    logger.debug("当前伪装 UA: %s", headers["User-Agent"])
+
     try:
         response = session.get(url, headers=headers, allow_redirects=True, timeout=10)
         response.raise_for_status()
     except Exception as e:
-        print(f"❌ 请求失败: {e}\n")
+        logger.error("请求失败: %s", e)
         return
 
     html = response.text
 
-    # 风控检测拦截
-    if "验证码" in html or "访问过于频繁" in html:
-        print("❌ 提取失败：当前 IP 似乎触发了小红书的风控拦截，或者 Cookie 已失效。请尝试在浏览器中打开链接完成验证。\n")
+    # 风控检测（综合判定，文案 + 重定向）
+    if detect_risk_control(html, response):
+        logger.error(
+            "提取失败：触发风控拦截或 Cookie 已失效（可能被重定向到验证页）。"
+            "请在浏览器中打开链接完成验证后重试。"
+        )
         return
 
-    state_match = re.search(r'window\.__INITIAL_STATE__=({.*?})</script>', html, re.DOTALL)
+    # 贪婪匹配到最后一个 } 后接 </script>，避免被内部 }</script> 截断
+    state_match = re.search(r"window\.__INITIAL_STATE__\s*=\s*(\{.*\})\s*</script>", html, re.DOTALL)
     if not state_match:
-        print("❌ 未能找到页面数据。可能是页面结构变更或 Cookie 失效。\n")
+        logger.error("未能找到页面数据。可能是页面结构变更或 Cookie 失效。")
         return
 
     try:
-        state_json = state_match.group(1).replace('undefined', 'null')
+        # 仅替换 JSON 值语境的 undefined -> null，避免误伤正文/URL
+        state_json = normalize_xhs_state_json(state_match.group(1))
         data = json.loads(state_json)
     except json.JSONDecodeError as e:
-        print(f"❌ JSON 解析失败: {e}\n")
+        logger.error("JSON 解析失败: %s", e)
         return
 
     try:
-        note_data = data.get('note', {}).get('noteDetailMap', {})
+        note_data = data.get("note", {}).get("noteDetailMap", {})
         if not note_data:
-            print("❌ 提取详情失败，页面结构可能已更新。\n")
+            logger.error("提取详情失败，页面结构可能已更新。")
             return
 
         note_id = list(note_data.keys())[0]
-        note = note_data[note_id].get('note', {})
-        
-        title = note.get('title', f'xhs_{note_id}')
-        safe_title = re.sub(r'[\\/*?:"<>|\r\n]', "", title).strip() or f'xhs_{note_id}'
+        note = note_data[note_id].get("note", {})
+
+        title = note.get("title", f"xhs_{note_id}")
+        safe_title = sanitize_filename(title) or f"xhs_{note_id}"
 
         base_path = os.path.join(DOWNLOAD_DIR, safe_title)
         os.makedirs(base_path, exist_ok=True)
-        print(f"📁 目标文件夹: {base_path}")
- 
+        logger.info("目标文件夹: %s", base_path)
+
         download_tasks = []
 
         # 1. 提取图片链接并加入任务池
-        image_list = note.get('imageList', [])
+        image_list = note.get("imageList", []) or []
         if image_list:
-            print(f"📸 发现 {len(image_list)} 张图片，开启多线程下载...")
+            logger.info("发现 %d 张图片，开启多线程下载...", len(image_list))
             for i, img in enumerate(image_list):
-                img_url = img.get('urlDefault') or img.get('url') or img.get('infoList', [{}])[0].get('url')
+                img_url = (
+                    img.get("urlDefault")
+                    or img.get("url")
+                    or ((img.get("infoList") or [{}])[0] or {}).get("url")
+                )
                 if img_url:
-                    if img_url.startswith('//'):
-                        img_url = 'https:' + img_url
-                    filepath = os.path.join(base_path, f"{safe_title}_{i+1}.jpg")
+                    if img_url.startswith("//"):
+                        img_url = "https:" + img_url
+                    filepath = os.path.join(base_path, f"{safe_title}_{i + 1}.jpg")
                     download_tasks.append((img_url, filepath))
 
-        # 2. 提取视频链接并加入任务池
-        video = note.get('video')
+        # 2. 提取视频链接并加入任务池（显式判定，失败有原因）
+        video = note.get("video")
         if video:
-            print("🎥 发现视频，加入下载队列...")
-            video_url = None
-            try:
-                video_url = video.get('media', {}).get('stream', {}).get('h264', [{}])[0].get('masterUrl')
-            except (IndexError, AttributeError):
-                pass
-            
-            if not video_url:
-                video_url = video.get('url')
-
+            video_url, reason = extract_video_url(video)
             if video_url:
-                if video_url.startswith('//'):
-                    video_url = 'https:' + video_url
+                logger.info("发现视频，加入下载队列...")
+                if video_url.startswith("//"):
+                    video_url = "https:" + video_url
                 filepath = os.path.join(base_path, f"{safe_title}_video.mp4")
                 download_tasks.append((video_url, filepath))
+            else:
+                logger.warning("发现 video 字段但未能提取到直链：%s", reason)
 
         # 3. 核心：执行多线程下载任务
         if download_tasks:
@@ -180,32 +227,38 @@ def download_xhs_media(url, cookie):
                     executor.submit(download_file, session, task[0], task[1], headers)
                     for task in download_tasks
                 ]
-                
+
                 # as_completed 允许我们在任意一个线程完成时立即打印结果，而不用等待所有任务结束
                 for future in as_completed(futures):
-                    print(future.result())
+                    logger.info("%s", future.result())
 
-        print("✅ 该链接下载任务完成！\n" + "-"*40 + "\n")
+        logger.info("该链接下载任务完成！")
 
     except Exception as e:
-         print(f"❌ 解析数据时发生意外错误: {e}\n")
+        logger.error("解析数据时发生意外错误: %s", e)
+
 
 if __name__ == "__main__":
-    print("🚀 欢迎使用媒体下载器 (输入 q 退出)")
+    logger.info("欢迎使用媒体下载器 (输入 q 退出)")
     while True:
-        target_url = input("🔗 请输入文章链接: ").strip()
-        if target_url.lower() == 'q':
-            print("👋 退出程序")
+        try:
+            target_url = input("🔗 请输入文章链接: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n👋 退出程序")
             break
-            
+
+        if target_url.lower() == "q":
+            logger.info("退出程序")
+            break
+
         if not target_url:
             continue
-            
+
         site_cookie = load_cookie_for_url(target_url)
-        
+
         if site_cookie:
             site_name = get_site_name(target_url)
             if site_name == "xiaohongshu":
                 download_xhs_media(target_url, site_cookie)
             else:
-                print(f"⚠️ 目前还没有编写 {site_name} 的解析代码，仅支持小红书。\n")
+                logger.warning("目前还没有编写 %s 的解析代码，仅支持小红书。", site_name)

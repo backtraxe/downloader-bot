@@ -1,4 +1,4 @@
-requests
-fake_useragent
-beautifulsoup4
-curl_cffi
+requests>=2.32
+fake_useragent>=2.2
+beautifulsoup4>=4.12
+curl_cffi>=0.15
