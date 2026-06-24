@@ -1,3 +1,21 @@
-cookies/
+# 运行产物
 download/
+*.log
+*.tmp
 
+# 敏感凭据
+cookies/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+
+# macOS
+.DS_Store
+
+# IDE / 编辑器
+.idea/
+.vscode/
