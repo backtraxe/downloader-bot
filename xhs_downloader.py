@@ -4,9 +4,9 @@ import json
 import os
 import time
 import random
-from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from sites import get_site_name, load_cookie_for_url
 from utils import (
     init_useragent,
     normalize_xhs_state_json,
@@ -17,54 +17,11 @@ from utils import (
 
 logger = setup_logging()
 
-COOKIE_DIR = "cookies"
 DOWNLOAD_DIR = "download"
 
 # 初始化 fake_useragent，尽量生成 PC 端的 User-Agent
 # 这样可以确保请求到的是小红书的网页端，从而顺利提取 __INITIAL_STATE__
 ua, _FALLBACK_UA = init_useragent(logger)
-
-
-def get_site_name(url):
-    """根据链接解析并归一化网站名称"""
-    domain = urlparse(url).netloc.lower()
-
-    if "xiaohongshu.com" in domain or "xhslink.com" in domain:
-        return "xiaohongshu"
-    elif "bilibili.com" in domain or "b23.tv" in domain:
-        return "bilibili"
-    elif "douyin.com" in domain or "v.douyin.com" in domain:
-        return "douyin"
-    else:
-        # 未知域名：取最后两段作为站点名；无点/IP 场景用完整 host
-        parts = domain.split(":")[0].split(".")
-        if len(parts) >= 2:
-            return f"{parts[-2]}.{parts[-1]}"
-        return domain.replace(":", "_") or "unknown"
-
-
-def load_cookie_for_url(url):
-    """根据 URL 自动加载对应的独立 Cookie 文件。
-    Cookie 为敏感凭据，仅从 gitignore 的 cookies/ 目录读取。"""
-    site_name = get_site_name(url)
-    os.makedirs(COOKIE_DIR, exist_ok=True)
-    cookie_file = os.path.join(COOKIE_DIR, f"{site_name}.txt")
-
-    if not os.path.exists(cookie_file):
-        with open(cookie_file, "w", encoding="utf-8") as f:
-            f.write("")
-        logger.warning("未找到 %s 的 Cookie！", site_name)
-        logger.warning("请在 %s 中填入 Cookie 保存后，再尝试下载。", cookie_file)
-        return None
-
-    with open(cookie_file, "r", encoding="utf-8") as f:
-        cookie = f.read().strip()
-
-    if not cookie:
-        logger.warning("文件 %s 内容为空！请填入 Cookie 后重试。", cookie_file)
-        return None
-
-    return cookie
 
 
 def get_headers(cookie):
