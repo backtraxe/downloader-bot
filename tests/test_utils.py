@@ -8,6 +8,7 @@ import pytest
 from utils import (
     cookie_header_to_netscape,
     guess_extension,
+    init_useragent,
     normalize_url,
     sanitize_filename,
     unique_path,
@@ -184,4 +185,20 @@ class TestCookieHeaderToNetscape:
         content = out_file.read_text()
         assert ".bilibili.com" in content
         assert "SESSDATA" in content
+
+
+# ---------------- init_useragent ----------------
+
+class TestInitUseragent:
+    def test_returns_usable_ua(self):
+        """fake_useragent 2.x 用 os=["Windows"]（数据里 OS 值首字母大写），
+        随机 UA 应能取到非 fallback 的真实 UA。"""
+        import logging
+        ua, fallback = init_useragent(logging.getLogger("test"))
+        # 只要 fake_useragent 装了且内置数据可用，ua 就不应是 None
+        if ua is None:
+            pytest.skip("fake_useragent 不可用（环境问题），已降级固定 UA")
+        # 连续取若干次，至少应有一次不是 fallback（排除极小概率恰好抽到 fallback）
+        samples = [ua.random for _ in range(20)]
+        assert any(s != fallback for s in samples), "随机 UA 全是 fallback，OS 传参可能错了"
 
