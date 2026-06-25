@@ -38,6 +38,7 @@ python xhs_downloader.py
 ```
 
 - 手写解析 `window.__INITIAL_STATE__`，提取图片列表和视频流（比 yt-dlp 对小红书更可控）
+- 支持 `xhslink.com` 短链与 App 分享链接（含 `xsec_token`），脚本会跟随重定向到 `xiaohongshu.com` 后再解析
 - 需要在 `cookies/xiaohongshu.txt` 中填入浏览器 Cookie；文件不存在或为空时脚本会自动创建并提示
 
 ### `1024_downloader.py` — 通用网页媒体抓取
