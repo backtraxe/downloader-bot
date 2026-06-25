@@ -65,12 +65,13 @@ def init_useragent(logger: logging.Logger):
         return None, _DEFAULT_UA
 
     try:
-        ua = UserAgent(os="windows")
-        # 主动触发一次 random，探测数据是否可用；
-        # 2.x 在数据缺失时会记录 "Error occurred ... suppressed with fallback" 到 stderr
-        # 并返回固定 fallback。这里无法直接判定，故用 try/except + 哨兵探测。
-        sample = ua.random
-        if not sample or sample == ua.fallback:
+        # fake_useragent 2.x：os 参数是可迭代类型，内置数据里 OS 值为 "Windows"（首字母大写）。
+        # 传小写字符串 "windows" 会导致过滤后为空、ua.random 恒等于 fallback。
+        ua = UserAgent(os=["Windows"])
+        # 探测：连续取若干次，若全等于 fallback 则判定数据不可用，降级固定 UA。
+        # 用多次采样避免极小概率恰好抽到 fallback 造成误判。
+        samples = [ua.random for _ in range(5)]
+        if not any(s and s != ua.fallback for s in samples):
             logger.warning("fake_useragent 随机 UA 不可用（数据加载失败），降级为固定 UA")
             return None, _DEFAULT_UA
         return ua, _DEFAULT_UA
