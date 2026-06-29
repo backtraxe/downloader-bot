@@ -2,7 +2,7 @@
 """xhs_downloader.py 纯函数单元测试（无网络依赖）"""
 import pytest
 
-from xhs_downloader import detect_note_not_found, detect_risk_control
+from xhs_downloader import detect_note_not_found, detect_risk_control, extract_xhs_author
 
 
 # ---------------- detect_note_not_found ----------------
@@ -70,3 +70,29 @@ class TestDetectRiskControlRegression:
         html = "<html><title>小红书 - 你访问的页面不见了</title></html>"
         resp = type("R", (), {"url": "https://www.xiaohongshu.com/404?errorCode=-510001"})()
         assert detect_risk_control(html, resp) is False
+
+
+# ---------------- extract_xhs_author ----------------
+
+class TestExtractXhsAuthor:
+    def test_nickname_key(self):
+        note = {"user": {"nickname": "小红书作者"}}
+        assert extract_xhs_author(note) == "小红书作者"
+
+    def test_nickname_camel_case_fallback(self):
+        # 接口曾变更大小写，nickName 兜底
+        note = {"user": {"nickName": "另一作者"}}
+        assert extract_xhs_author(note) == "另一作者"
+
+    def test_nickname_preferred_over_nickName(self):
+        # 两个 key 都在时优先 nickname
+        note = {"user": {"nickname": "优先这个", "nickName": "不该取"}}
+        assert extract_xhs_author(note) == "优先这个"
+
+    def test_missing_user_returns_empty(self):
+        assert extract_xhs_author({}) == ""
+        assert extract_xhs_author(None) == ""
+
+    def test_missing_both_keys_returns_empty(self):
+        assert extract_xhs_author({"user": {}}) == ""
+        assert extract_xhs_author({"user": None}) == ""

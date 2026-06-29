@@ -8,7 +8,9 @@ from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 
+from sites import get_site_name
 from utils import (
+    build_download_dir,
     guess_extension,
     init_useragent,
     is_html_content,
@@ -102,8 +104,10 @@ def extract_general_media(url):
     page_title = title_tag.text.strip() if title_tag else "未命名网页"
     safe_title = sanitize_filename(page_title, default="未命名网页")[:20]
 
-    domain = urlparse(url).netloc
-    base_path = os.path.join(DOWNLOAD_DIR, f"{domain}_{safe_title}")
+    # 任意网站归一化为最后两段域名（www.example.com → example.com），
+    # 与 downloader.py 的站点目录命名口径一致
+    site_name = get_site_name(url)
+    base_path = build_download_dir(site_name, safe_title)
     os.makedirs(base_path, exist_ok=True)
     logger.info("目标文件夹: %s", base_path)
 

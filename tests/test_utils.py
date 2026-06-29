@@ -6,6 +6,7 @@ import threading
 import pytest
 
 from utils import (
+    build_download_dir,
     cookie_header_to_netscape,
     guess_extension,
     init_useragent,
@@ -201,4 +202,68 @@ class TestInitUseragent:
         # 连续取若干次，至少应有一次不是 fallback（排除极小概率恰好抽到 fallback）
         samples = [ua.random for _ in range(20)]
         assert any(s != fallback for s in samples), "随机 UA 全是 fallback，OS 传参可能错了"
+
+
+# ---------------- build_download_dir ----------------
+
+class TestBuildDownloadDir:
+    def test_normal_path(self):
+        assert build_download_dir("bilibili", "某视频") == os.path.join("download", "bilibili", "某视频")
+
+    def test_xhs_site(self):
+        assert build_download_dir("xiaohongshu", "笔记") == os.path.join("download", "xiaohongshu", "笔记")
+
+    def test_empty_title_falls_back(self):
+        # 空标题兜底 untitled，不落到 download/<site>//
+        assert build_download_dir("youtube", "") == os.path.join("download", "youtube", "untitled")
+
+    def test_whitespace_title_falls_back(self):
+        assert build_download_dir("youtube", "   ") == os.path.join("download", "youtube", "untitled")
+
+    def test_path_traversal_blocked(self):
+        # 标题含路径分隔符，经 sanitize_filename 清洗后不得越层逃出 download/<site>/
+        out = build_download_dir("bilibili", "../../etc/passwd")
+        # 结果必须仍在 download/bilibili/ 之下，且不含 ..
+        assert out.startswith(os.path.join("download", "bilibili") + os.sep)
+        assert ".." not in out.split(os.sep)
+
+    def test_custom_download_dir(self):
+        assert build_download_dir("x", "t", download_dir="out") == os.path.join("out", "x", "t")
+
+    def test_strips_illegal_chars_from_title(self):
+        # 标题含 Windows 保留字符与路径分隔符，应被清洗
+        out = build_download_dir("x", 'a:*?"<>|b')
+        assert out.endswith("ab")
+        assert os.path.dirname(out) == os.path.join("download", "x")
+
+    # ---- 作者层 ----
+
+    def test_with_author(self):
+        assert build_download_dir("bilibili", "视频", author="某UP") == \
+            os.path.join("download", "bilibili", "某UP", "视频")
+
+    def test_author_empty_falls_back_to_no_author_layer(self):
+        # 作者为空串 → 退化为无作者层，不产生 unknown/ 或 NA/
+        assert build_download_dir("bilibili", "视频", author="") == \
+            os.path.join("download", "bilibili", "视频")
+
+    def test_author_none_falls_back_to_no_author_layer(self):
+        # author=None（默认）→ 原行为不变
+        assert build_download_dir("bilibili", "视频") == \
+            os.path.join("download", "bilibili", "视频")
+
+    def test_author_whitespace_falls_back(self):
+        # 纯空白 author → 退化为无作者层，不产生 unknown/ 占位
+        assert build_download_dir("bilibili", "视频", author="   ") == \
+            os.path.join("download", "bilibili", "视频")
+
+    def test_author_traversal_blocked(self):
+        # 作者名含路径分隔符，清洗后不得逃出 download/<site>/ 之下
+        out = build_download_dir("bilibili", "视频", author="../../etc")
+        assert out.startswith(os.path.join("download", "bilibili") + os.sep)
+        assert ".." not in out.split(os.sep)
+
+    def test_author_strips_illegal_chars(self):
+        out = build_download_dir("x", "t", author='a:*?"b')
+        assert out == os.path.join("download", "x", "ab", "t")
 
