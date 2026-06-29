@@ -87,6 +87,27 @@ def detect_risk_control(html, response):
     return False
 
 
+def detect_note_not_found(html, final_url):
+    """检测笔记已被删除/下架而落地到 404 页的情形。
+
+    小红书对不存在的笔记会重定向到 https://www.xiaohongshu.com/404?...
+    并在 query 里带 errorCode=-510001，页面 title 为「你访问的页面不见了」。
+    此时 __INITIAL_STATE__ 仍在但 noteDetailMap 为空，会被误判为页面结构变更。
+    三信号任一命中即判定为笔记不存在，避免误导排查方向。
+    """
+    final_url = (final_url or "").lower()
+    # 信号 1：重定向落地 URL 路径为 /404
+    if "/404" in final_url:
+        return True
+    # 信号 2：URL query 带 errorCode=-510001（小红书「笔记不存在」错误码）
+    if "errorcode=-510001" in final_url:
+        return True
+    # 信号 3：页面 title 文案
+    if html and "你访问的页面不见了" in html:
+        return True
+    return False
+
+
 def download_xhs_media(url, cookie):
     # 每次解析新链接都生成一个全新的随机 Header
     headers = get_headers(cookie)
@@ -111,6 +132,15 @@ def download_xhs_media(url, cookie):
         logger.error(
             "提取失败：触发风控拦截或 Cookie 已失效（可能被重定向到验证页）。"
             "请在浏览器中打开链接完成验证后重试。"
+        )
+        return
+
+    # 笔记不存在检测：落地到 404 页时 noteDetailMap 为空，
+    # 会被下方「页面结构可能已更新」误报，需在此提前拦截并给出明确原因。
+    if detect_note_not_found(html, response.url if response is not None else ""):
+        logger.error(
+            "提取失败：该笔记已被删除或不存在（小红书返回 404）。"
+            "请确认链接是否有效或已被作者删除。"
         )
         return
 
