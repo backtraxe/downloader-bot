@@ -160,6 +160,24 @@ def normalize_xhs_state_json(raw: str) -> str:
     return re.sub(r'(?<=[\[:\s,])\s*undefined\b', " null", raw)
 
 
+def build_download_dir(site_name, title, author=None, download_dir="download"):
+    """构造按站点归类的下载目录：download/<site>/<author>/<safe_title>。
+
+    三个下载脚本共用，保证输出根目录口径一致（都按站点分子目录）。
+    author 非空时多一层作者目录（"如果有的话"语义）；为空/None 时退化为
+    download/<site>/<safe_title>，不产生 unknown/ 或 NA/ 占位目录。
+    title 与 author 均来自网页、不可信——内部用 sanitize_filename 防御式清洗，
+    确保不会因含路径分隔符而越层（目录穿越）；空标题兜底 untitled。
+    返回相对路径，由调用方负责 makedirs。
+    """
+    parts = [download_dir, site_name]
+    if author and author.strip():
+        # author 非空（含非空白）才加层；纯空白归为无作者，避免 unknown/ 占位
+        parts.append(sanitize_filename(author, default="unknown"))
+    parts.append(sanitize_filename(title, default="untitled"))
+    return os.path.join(*parts)
+
+
 # Netscape cookie 文件里 expiration 用一个远期固定值（yt-dlp 不强制校验）。
 # 2099-01-01 ≈ 4070908800。无法用 time.time()（脚本环境约束），故常量。
 _NETSCAPE_EXPIRE = 4070908800

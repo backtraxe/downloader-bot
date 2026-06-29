@@ -40,11 +40,28 @@ _LOGIN_HINTS = (
 )
 
 
-def build_ydl_opts(site_name):
+def resolve_uploader(info):
+    """从 yt-dlp info dict 取作者名并清洗。返回可能为空的字符串。
+
+    uploader 是 yt-dlp 统一字段，所有已支持站点都会填；缺失/为空时返回 ""，
+    由调用方据此决定是否加作者目录层。uploader 来自网页、不可信，
+    经 sanitize_filename 清洗防目录穿越。
+    """
+    raw = (info or {}).get("uploader") or ""
+    # 空串直接返回 ""（sanitize_filename 对空串会兜底成 "untitled"，
+    # 那会让作者缺失时误加一层 untitled/ 目录，违背"缺失则退化"语义）
+    if not raw.strip():
+        return ""
+    return sanitize_filename(raw)
+
+
+def build_ydl_opts(site_name, author=""):
     """构造 yt-dlp 下载选项。
 
     cookiefile 指向 cookies/<site>.txt；文件为空时 yt-dlp 会忽略，
     由调用方在下载前提示用户是否需要填写 Cookie。
+    author 非空时输出路径多一层作者目录：download/<site>/<author>/<标题>.<ext>；
+    为空则退化为 download/<site>/<标题>.<ext>（不产生 NA/ 或 unknown/ 占位）。
     """
     cookie_path = cookie_file_for(site_name)
     # 空文件 / 不存在都不传 cookiefile，避免 yt-dlp 警告
@@ -52,9 +69,15 @@ def build_ydl_opts(site_name):
     if os.path.exists(cookie_path) and os.path.getsize(cookie_path) > 0:
         cookiefile = cookie_path
 
+    # 输出路径：有作者加一层；作者名已由 resolve_uploader 清洗
+    outtmpl_parts = [DOWNLOAD_DIR, site_name]
+    if author:
+        outtmpl_parts.append(author)
+    outtmpl_parts.append("%(title).200B.%(ext)s")
+
     return {
-        # 输出路径：download/<site>/<标题>.<ext>
-        "outtmpl": os.path.join(DOWNLOAD_DIR, site_name, "%(title).200B.%(ext)s"),
+        # 输出路径：download/<site>[/<author>]/<标题>.<ext>
+        "outtmpl": os.path.join(*outtmpl_parts),
         # 视频音频合并为 mp4
         "merge_output_format": "mp4",
         # 分片并发
@@ -107,12 +130,21 @@ def download_url(url):
             logger.warning("⚠️ %s 强烈建议填写 Cookie（cookies/%s.txt），否则大概率失败。",
                            site_name, site_name)
 
-    opts = build_ydl_opts(site_name)
     logger.info("开始下载: %s", url)
 
     try:
+        # 两段式：先探一次拿作者（uploader），再按作者层构造 outtmpl 下载。
+        # 代价是多一次请求；收益是作者缺失时自然退化为无作者层（无 NA/ 占位）。
+        probe_opts = {k: v for k, v in build_ydl_opts(site_name).items()
+                      if k in ("cookiefile", "quiet", "noprogress", "no_warnings")}
+        author = ""
+        with yt_dlp.YoutubeDL(probe_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            author = resolve_uploader(info)
+
+        opts = build_ydl_opts(site_name, author=author)
         with yt_dlp.YoutubeDL(opts) as ydl:
-            # 先 extract 校验 URL 是否可达，失败给出明确原因
+            # 再 extract 并下载；失败给出明确原因
             info = ydl.extract_info(url, download=True)
             title = sanitize_filename(info.get("title", "untitled")) if info else "untitled"
             logger.info("🎉 下载完成: %s", title)

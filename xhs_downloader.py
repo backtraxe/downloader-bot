@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from sites import get_site_name, load_cookie_for_url
 from utils import (
+    build_download_dir,
     init_useragent,
     normalize_xhs_state_json,
     sanitize_filename,
@@ -53,6 +54,13 @@ def download_file(session, url, filepath, headers):
         return f"  [成功] -> {os.path.basename(safe_path)}"
     except Exception as e:
         return f"  [失败] {os.path.basename(filepath)} 下载报错: {e}"
+
+
+def extract_xhs_author(note):
+    """从小红书 note 对象取作者昵称。note.user 上的 nickname/nickName
+    双 key 兼容（接口曾变更大小写）。取不到返回空串，由调用方据此不加作者层。"""
+    user = (note or {}).get("user") or {}
+    return user.get("nickname") or user.get("nickName") or ""
 
 
 def extract_video_url(video):
@@ -170,7 +178,11 @@ def download_xhs_media(url, cookie):
         title = note.get("title", f"xhs_{note_id}")
         safe_title = sanitize_filename(title) or f"xhs_{note_id}"
 
-        base_path = os.path.join(DOWNLOAD_DIR, safe_title)
+        # 作者：note.user 上的 nickname/nickName（接口曾变更大小写，双 key 兼容）
+        author = extract_xhs_author(note)
+
+        # 有作者则多一层目录：download/xiaohongshu/<作者>/<标题>/；无则退化
+        base_path = build_download_dir("xiaohongshu", safe_title, author=author)
         os.makedirs(base_path, exist_ok=True)
         logger.info("目标文件夹: %s", base_path)
 
