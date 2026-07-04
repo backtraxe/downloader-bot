@@ -35,6 +35,7 @@ def get_headers(cookie):
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Cookie": cookie,
         "Sec-Ch-Ua-Platform": '"Windows"',
+        "Referer": "https://www.xiaohongshu.com/",
     }
 
 
