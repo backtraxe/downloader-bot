@@ -1,4 +1,5 @@
 import requests
+from requests.adapters import HTTPAdapter
 import re
 import json
 import os
@@ -70,7 +71,33 @@ def _is_transient_error(err):
     return any(kw in err_str for kw in keywords)
 
 
-def download_file(session, url, filepath, headers, max_retries=3):
+def _build_session():
+    """构造带连接重试的 Session。
+    urllib3 层面配置 backoff_factor，使 DNS 解析失败、连接超时等
+    瞬时错误在底层自动重试，避免单次失败就抛出 Max retries exceeded。
+    """
+    session = requests.Session()
+    # urllib3.Retry 配置底层连接重试：
+    # total=5 最多重试 5 次，backoff_factor=1 使退避递增（0, 1, 2, 4, 8 秒）
+    # 仅对连接错误重试，不对已发送请求的读取错误重试（避免重复下载）
+    from urllib3.util.retry import Retry
+    retry = Retry(
+        total=5,
+        backoff_factor=1,
+        status_forcelist=[502, 503, 504],
+        allowed_methods=["GET", "HEAD"],
+    )
+    adapter = HTTPAdapter(
+        max_retries=retry,
+        pool_connections=10,
+        pool_maxsize=10,
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+def download_file(session, url, filepath, headers, max_retries=5):
     """单文件下载逻辑，供多线程调用。文件名冲突时原子去重，绝不覆盖。
     对 DNS 解析失败、连接超时等瞬时网络错误自动重试，提高下载成功率。
     流式写入失败时清理占位文件，避免重试残留空文件。"""
@@ -108,7 +135,7 @@ def download_file(session, url, filepath, headers, max_retries=3):
             last_err = e
             # 仅对瞬时网络错误重试（DNS 失败、连接超时、连接重置）
             if attempt < max_retries and _is_transient_error(e):
-                wait = attempt * 2 + random.uniform(0, 1)
+                wait = attempt * 3 + random.uniform(0, 1)
                 logger.warning(
                     "  [重试 %d/%d] %s 将在 %.1fs 后重试: %s",
                     attempt, max_retries, os.path.basename(filepath), wait, e,
@@ -179,7 +206,7 @@ def detect_note_not_found(html, final_url):
     return False
 
 
-def _fetch_page(session, url, headers, max_retries=3):
+def _fetch_page(session, url, headers, max_retries=5):
     """请求页面并跟随重定向，对瞬时网络错误自动重试。
     返回 Response 对象；所有重试均失败时返回 None。
     """
@@ -193,7 +220,7 @@ def _fetch_page(session, url, headers, max_retries=3):
         except Exception as e:
             last_err = e
             if attempt < max_retries and _is_transient_error(e):
-                wait = attempt * 2 + random.uniform(0, 1)
+                wait = attempt * 3 + random.uniform(0, 1)
                 logger.warning(
                     "请求重试 %d/%d 将在 %.1fs 后重试: %s",
                     attempt, max_retries, wait, e,
@@ -210,7 +237,7 @@ def download_xhs_media(url, cookie):
     headers = get_headers(cookie)
 
     # 使用 Session 维持连接池，提高多图下载效率
-    session = requests.Session()
+    session = _build_session()
 
     logger.info("正在请求: %s", url)
     logger.debug("当前伪装 UA: %s", headers["User-Agent"])
