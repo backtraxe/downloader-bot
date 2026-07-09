@@ -33,6 +33,15 @@ _EXT_BY_CONTENT_TYPE = {
 # 被防盗链/风控拦截时常返回的 HTML content-type
 _HTML_CONTENT_TYPES = ("text/html", "application/xhtml+xml")
 
+# 匹配 http(s):// 开头的完整 URL（到首个空白字符为止）
+_URL_PATTERN = re.compile(r'https?://[^\s]+')
+
+# URL 尾部需要剔除的字符：中日韩文字、中文标点、英文标点、括号引号等
+# 这些字符不会出现在合法 URL 末尾，通常来自分享文案的上下文
+_URL_TRAILING_CHARS = re.compile(
+    r"[\u3000-\u9fff\uff00-\uffef，。、；：！？）》」』）\"'\]\]>}]+$"
+)
+
 _DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -92,6 +101,26 @@ def normalize_url(url, page_url: str) -> str:
     if url.startswith("http://") or url.startswith("https://"):
         return url
     return urljoin(page_url, url)
+
+
+def extract_urls(text):
+    """从任意文本中提取所有 http(s) URL，去重并保持出现顺序。
+
+    用户可能粘贴分享文案而非纯 URL（如「6 发布了小红书笔记 http://xhslink.com/o/abc 快来看」），
+    本函数从混合文本中提取 URL，剔除尾部的中文/标点等上下文字符。
+    返回去重后的 URL 列表；无匹配时返回空列表。
+    """
+    if not text:
+        return []
+    raw_urls = _URL_PATTERN.findall(text)
+    seen = set()
+    result = []
+    for url in raw_urls:
+        url = _URL_TRAILING_CHARS.sub("", url)
+        if url and url not in seen:
+            seen.add(url)
+            result.append(url)
+    return result
 
 
 def sanitize_filename(name: str, default: str = "untitled", max_len: int = 80) -> str:

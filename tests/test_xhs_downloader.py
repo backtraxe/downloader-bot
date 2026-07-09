@@ -96,3 +96,62 @@ class TestExtractXhsAuthor:
     def test_missing_both_keys_returns_empty(self):
         assert extract_xhs_author({"user": {}}) == ""
         assert extract_xhs_author({"user": None}) == ""
+
+
+# ---------------- ensure_https ----------------
+
+class TestEnsureHttps:
+    """媒体链接协议升级测试：http:// 和 // 统一升级为 https://，
+    避免 CDN 图片走 80 端口因 DNS/网络问题失败。"""
+
+    def test_http_upgraded_to_https(self):
+        from xhs_downloader import ensure_https
+        url = "http://sns-webpic-qc.xhscdn.com/202607100245/img.webp"
+        assert ensure_https(url) == "https://sns-webpic-qc.xhscdn.com/202607100245/img.webp"
+
+    def test_protocol_relative_upgraded(self):
+        from xhs_downloader import ensure_https
+        assert ensure_https("//sns-webpic-qc.xhscdn.com/img.webp") == "https://sns-webpic-qc.xhscdn.com/img.webp"
+
+    def test_https_unchanged(self):
+        from xhs_downloader import ensure_https
+        url = "https://sns-webpic-qc.xhscdn.com/img.webp"
+        assert ensure_https(url) == url
+
+    def test_empty_returns_empty(self):
+        from xhs_downloader import ensure_https
+        assert ensure_https("") == ""
+
+    def test_none_returns_none(self):
+        from xhs_downloader import ensure_https
+        assert ensure_https(None) is None
+
+
+# ---------------- _is_transient_error ----------------
+
+class TestIsTransientError:
+    """瞬时网络错误判定测试，确保 DNS 失败、超时等错误能触发重试。"""
+
+    def test_dns_failure_is_transient(self):
+        from xhs_downloader import _is_transient_error
+        err = Exception("HTTPConnectionPool: Failed to resolve 'sns-webpic-qc.xhscdn.com' "
+                        "([Errno 7] No address associated with hostname)")
+        assert _is_transient_error(err) is True
+
+    def test_timeout_is_transient(self):
+        from xhs_downloader import _is_transient_error
+        assert _is_transient_error(Exception("ConnectTimeoutError: connect timeout")) is True
+
+    def test_connection_reset_is_transient(self):
+        from xhs_downloader import _is_transient_error
+        assert _is_transient_error(Exception("ConnectionResetError: connection reset")) is True
+
+    def test_http_404_not_transient(self):
+        from xhs_downloader import _is_transient_error
+        err = Exception("404 Client Error: Not Found")
+        assert _is_transient_error(err) is False
+
+    def test_http_403_not_transient(self):
+        from xhs_downloader import _is_transient_error
+        err = Exception("403 Client Error: Forbidden")
+        assert _is_transient_error(err) is False

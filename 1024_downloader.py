@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from sites import get_site_name
 from utils import (
     build_download_dir,
+    extract_urls,
     guess_extension,
     init_useragent,
     is_html_content,
@@ -194,17 +195,21 @@ if __name__ == "__main__":
     logger.info("通用网页静态媒体下载器 (输入 q 退出)")
     while True:
         try:
-            target_url = input("🔗 请输入任意网页链接: ").strip()
+            raw_input = input("🔗 请输入任意网页链接: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n👋 退出程序")
             break
 
-        if target_url.lower() == "q":
+        if raw_input.lower() == "q":
             logger.info("退出程序")
             break
-
-        if not target_url.startswith("http"):
-            logger.warning("链接需以 http:// 或 https:// 开头")
+        if not raw_input:
             continue
 
-        extract_general_media(target_url)
+        urls = extract_urls(raw_input)
+        if not urls:
+            logger.warning("未识别到有效链接，请输入包含 http(s):// 的分享文本或 URL。")
+            continue
+
+        for target_url in urls:
+            extract_general_media(target_url)

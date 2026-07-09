@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from sites import get_site_name, load_cookie_for_url
 from utils import (
     build_download_dir,
+    extract_urls,
+    guess_extension,
     init_useragent,
     normalize_xhs_state_json,
     sanitize_filename,
@@ -17,8 +19,6 @@ from utils import (
 )
 
 logger = setup_logging()
-
-DOWNLOAD_DIR = "download"
 
 # 初始化 fake_useragent，尽量生成 PC 端的 User-Agent
 # 这样可以确保请求到的是小红书的网页端，从而顺利提取 __INITIAL_STATE__
@@ -39,22 +39,84 @@ def get_headers(cookie):
     }
 
 
-def download_file(session, url, filepath, headers):
-    """单文件下载逻辑，供多线程调用。文件名冲突时原子去重，绝不覆盖。"""
-    try:
-        # 引入 0.1 ~ 0.5 秒的随机延迟，防止并发过高被瞬间阻断连接
-        time.sleep(random.uniform(0.1, 0.5))
-        r = session.get(url, headers=headers, stream=True, timeout=15)
-        r.raise_for_status()
+def ensure_https(url):
+    """将协议相对(//)或 http:// 的媒体链接统一升级为 https://。
+    小红书 CDN 图片直链常以 http:// 返回，部分 CDN 节点仅稳定支持 HTTPS，
+    且 http:// 走 80 端口易因 DNS/网络问题失败。统一升级避免此问题。"""
+    if not url:
+        return url
+    if url.startswith("//"):
+        return "https:" + url
+    if url.startswith("http://"):
+        return "https://" + url[len("http://"):]
+    return url
 
-        safe_path = unique_path(filepath)
-        with open(safe_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-        return f"  [成功] -> {os.path.basename(safe_path)}"
-    except Exception as e:
-        return f"  [失败] {os.path.basename(filepath)} 下载报错: {e}"
+
+def _is_transient_error(err):
+    """判断是否为值得重试的瞬时网络错误（DNS 解析失败、超时、连接重置等）。"""
+    err_str = str(err).lower()
+    keywords = (
+        "no address associated with hostname",   # DNS 解析失败
+        "name or service not known",             # DNS 解析失败 (Linux)
+        "nodename nor servname provided",        # DNS 解析失败 (macOS)
+        "max retries exceeded",                  # 连接池耗尽/重试上限
+        "connection to",                         # 连接被拒/断开
+        "connection reset",                      # 连接被重置
+        "connection aborted",                    # 连接中断
+        "read timed out",                        # 读取超时
+        "connect timeout",                       # 连接超时
+        "timeout",                                # 通用超时
+    )
+    return any(kw in err_str for kw in keywords)
+
+
+def download_file(session, url, filepath, headers, max_retries=3):
+    """单文件下载逻辑，供多线程调用。文件名冲突时原子去重，绝不覆盖。
+    对 DNS 解析失败、连接超时等瞬时网络错误自动重试，提高下载成功率。
+    流式写入失败时清理占位文件，避免重试残留空文件。"""
+    url = ensure_https(url)
+    last_err = None
+    for attempt in range(1, max_retries + 1):
+        safe_path = None
+        try:
+            # 引入 0.1 ~ 0.5 秒的随机延迟，防止并发过高被瞬间阻断连接
+            time.sleep(random.uniform(0.1, 0.5))
+            r = session.get(url, headers=headers, stream=True, timeout=15)
+            r.raise_for_status()
+
+            # 从响应头推断真实扩展名，修正 filepath（避免 webp 存成 .jpg）
+            content_type = r.headers.get("Content-Type", "")
+            ext = guess_extension(url, content_type, default="")
+            if ext:
+                root, old_ext = os.path.splitext(filepath)
+                if old_ext.lower() != ext.lower():
+                    filepath = root + ext
+
+            safe_path = unique_path(filepath)
+            with open(safe_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            return f"  [成功] -> {os.path.basename(safe_path)}"
+        except Exception as e:
+            # 流式写入中途失败时清理占位空文件，避免重试时 unique_path 跳过它
+            if safe_path and os.path.exists(safe_path) and os.path.getsize(safe_path) == 0:
+                try:
+                    os.remove(safe_path)
+                except OSError:
+                    pass
+            last_err = e
+            # 仅对瞬时网络错误重试（DNS 失败、连接超时、连接重置）
+            if attempt < max_retries and _is_transient_error(e):
+                wait = attempt * 2 + random.uniform(0, 1)
+                logger.warning(
+                    "  [重试 %d/%d] %s 将在 %.1fs 后重试: %s",
+                    attempt, max_retries, os.path.basename(filepath), wait, e,
+                )
+                time.sleep(wait)
+                continue
+            break
+    return f"  [失败] {os.path.basename(filepath)} 下载报错: {last_err}"
 
 
 def extract_xhs_author(note):
@@ -117,6 +179,32 @@ def detect_note_not_found(html, final_url):
     return False
 
 
+def _fetch_page(session, url, headers, max_retries=3):
+    """请求页面并跟随重定向，对瞬时网络错误自动重试。
+    返回 Response 对象；所有重试均失败时返回 None。
+    """
+    url = ensure_https(url)
+    last_err = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = session.get(url, headers=headers, allow_redirects=True, timeout=15)
+            response.raise_for_status()
+            return response
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries and _is_transient_error(e):
+                wait = attempt * 2 + random.uniform(0, 1)
+                logger.warning(
+                    "请求重试 %d/%d 将在 %.1fs 后重试: %s",
+                    attempt, max_retries, wait, e,
+                )
+                time.sleep(wait)
+                continue
+            break
+    logger.error("请求失败: %s", last_err)
+    return None
+
+
 def download_xhs_media(url, cookie):
     # 每次解析新链接都生成一个全新的随机 Header
     headers = get_headers(cookie)
@@ -127,11 +215,8 @@ def download_xhs_media(url, cookie):
     logger.info("正在请求: %s", url)
     logger.debug("当前伪装 UA: %s", headers["User-Agent"])
 
-    try:
-        response = session.get(url, headers=headers, allow_redirects=True, timeout=10)
-        response.raise_for_status()
-    except Exception as e:
-        logger.error("请求失败: %s", e)
+    response = _fetch_page(session, url, headers)
+    if response is None:
         return
 
     html = response.text
@@ -200,8 +285,7 @@ def download_xhs_media(url, cookie):
                     or ((img.get("infoList") or [{}])[0] or {}).get("url")
                 )
                 if img_url:
-                    if img_url.startswith("//"):
-                        img_url = "https:" + img_url
+                    img_url = ensure_https(img_url)
                     filepath = os.path.join(base_path, f"{safe_title}_{i + 1}.jpg")
                     download_tasks.append((img_url, filepath))
 
@@ -211,8 +295,7 @@ def download_xhs_media(url, cookie):
             video_url, reason = extract_video_url(video)
             if video_url:
                 logger.info("发现视频，加入下载队列...")
-                if video_url.startswith("//"):
-                    video_url = "https:" + video_url
+                video_url = ensure_https(video_url)
                 filepath = os.path.join(base_path, f"{safe_title}_video.mp4")
                 download_tasks.append((video_url, filepath))
             else:
@@ -242,23 +325,29 @@ if __name__ == "__main__":
     logger.info("欢迎使用媒体下载器 (输入 q 退出)")
     while True:
         try:
-            target_url = input("🔗 请输入文章链接: ").strip()
+            raw_input = input("🔗 请输入文章链接: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n👋 退出程序")
             break
 
-        if target_url.lower() == "q":
+        if raw_input.lower() == "q":
             logger.info("退出程序")
             break
 
-        if not target_url:
+        if not raw_input:
             continue
 
-        site_cookie = load_cookie_for_url(target_url)
+        urls = extract_urls(raw_input)
+        if not urls:
+            logger.warning("未识别到有效链接，请输入包含 http(s):// 的分享文本或 URL。")
+            continue
 
-        if site_cookie:
-            site_name = get_site_name(target_url)
-            if site_name == "xiaohongshu":
-                download_xhs_media(target_url, site_cookie)
-            else:
-                logger.warning("目前还没有编写 %s 的解析代码，仅支持小红书。", site_name)
+        for target_url in urls:
+            site_cookie = load_cookie_for_url(target_url)
+
+            if site_cookie:
+                site_name = get_site_name(target_url)
+                if site_name == "xiaohongshu":
+                    download_xhs_media(target_url, site_cookie)
+                else:
+                    logger.warning("目前还没有编写 %s 的解析代码，仅支持小红书。", site_name)

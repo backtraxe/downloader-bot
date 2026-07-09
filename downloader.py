@@ -19,7 +19,7 @@ from sites import (
     cookie_file_for,
     get_site_name,
 )
-from utils import sanitize_filename, setup_logging
+from utils import extract_urls, sanitize_filename, setup_logging
 
 logger = setup_logging()
 
@@ -166,21 +166,24 @@ def main():
     logger.info("输入 q 退出")
     while True:
         try:
-            target_url = input("\n🔗 请输入链接: ").strip()
+            raw_input = input("\n🔗 请输入链接: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n👋 退出程序")
             break
 
-        if target_url.lower() == "q":
+        if raw_input.lower() == "q":
             logger.info("退出程序")
             break
-        if not target_url:
-            continue
-        if not target_url.startswith("http"):
-            logger.warning("链接需以 http:// 或 https:// 开头")
+        if not raw_input:
             continue
 
-        download_url(target_url)
+        urls = extract_urls(raw_input)
+        if not urls:
+            logger.warning("未识别到有效链接，请输入包含 http(s):// 的分享文本或 URL。")
+            continue
+
+        for target_url in urls:
+            download_url(target_url)
 
 
 if __name__ == "__main__":

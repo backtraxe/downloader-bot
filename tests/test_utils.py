@@ -267,3 +267,77 @@ class TestBuildDownloadDir:
         out = build_download_dir("x", "t", author='a:*?"b')
         assert out == os.path.join("download", "x", "ab", "t")
 
+
+
+# ---------------- extract_urls ----------------
+
+class TestExtractUrls:
+    """从任意文本提取 URL 的测试：支持分享文案、多 URL、去重等。"""
+
+    def test_pure_url(self):
+        from utils import extract_urls
+        assert extract_urls("https://www.xiaohongshu.com/explore/abc") == \
+            ["https://www.xiaohongshu.com/explore/abc"]
+
+    def test_url_in_share_text(self):
+        from utils import extract_urls
+        text = "6 发布了一篇小红线笔记 http://xhslink.com/o/abc 快来看"
+        assert extract_urls(text) == ["http://xhslink.com/o/abc"]
+
+    def test_strips_trailing_punctuation(self):
+        from utils import extract_urls
+        assert extract_urls("看看 https://www.youtube.com/watch?v=abc。") == \
+            ["https://www.youtube.com/watch?v=abc"]
+
+    def test_strips_trailing_cjk(self):
+        from utils import extract_urls
+        # 中文紧贴 URL 尾部，应被剔除
+        assert extract_urls("http://xhslink.com/o/abc好棒") == \
+            ["http://xhslink.com/o/abc"]
+
+    def test_strips_trailing_fullwidth_punctuation(self):
+        from utils import extract_urls
+        assert extract_urls("https://example.com/a）") == ["https://example.com/a"]
+        assert extract_urls("https://example.com/a》") == ["https://example.com/a"]
+
+    def test_multiple_urls(self):
+        from utils import extract_urls
+        text = "https://x.com/a/status/1 https://twitter.com/b/status/2"
+        assert extract_urls(text) == [
+            "https://x.com/a/status/1",
+            "https://twitter.com/b/status/2",
+        ]
+
+    def test_deduplicates_urls(self):
+        from utils import extract_urls
+        text = "重复 https://example.com/a 再来 https://example.com/a"
+        assert extract_urls(text) == ["https://example.com/a"]
+
+    def test_no_url_returns_empty(self):
+        from utils import extract_urls
+        assert extract_urls("今天天气真好") == []
+        assert extract_urls("没有链接的纯文本") == []
+
+    def test_empty_input(self):
+        from utils import extract_urls
+        assert extract_urls("") == []
+        assert extract_urls(None) == []
+
+    def test_url_with_query_and_fragment(self):
+        from utils import extract_urls
+        url = "https://www.xiaohongshu.com/explore/abc?xsec_token=CBc%3D&share=1#detail"
+        assert extract_urls(url) == [url]
+
+    def test_multiline_text(self):
+        from utils import extract_urls
+        text = "https://example.com/a\nhttps://example.com/b"
+        assert extract_urls(text) == ["https://example.com/a", "https://example.com/b"]
+
+    def test_http_protocol(self):
+        from utils import extract_urls
+        assert extract_urls("http://example.com/a") == ["http://example.com/a"]
+
+    def test_preserves_order(self):
+        from utils import extract_urls
+        text = "https://b.com/2 https://a.com/1"
+        assert extract_urls(text) == ["https://b.com/2", "https://a.com/1"]
