@@ -100,7 +100,7 @@ def _build_session():
 def download_file(session, url, filepath, headers, max_retries=5):
     """单文件下载逻辑，供多线程调用。文件名冲突时原子去重，绝不覆盖。
     对 DNS 解析失败、连接超时等瞬时网络错误自动重试，提高下载成功率。
-    流式写入失败时清理占位文件，避免重试残留空文件。"""
+    流式写入失败时清理残留文件，避免重试留下损坏文件。"""
     url = ensure_https(url)
     last_err = None
     for attempt in range(1, max_retries + 1):
@@ -126,8 +126,9 @@ def download_file(session, url, filepath, headers, max_retries=5):
                         f.write(chunk)
             return f"  [成功] -> {os.path.basename(safe_path)}"
         except Exception as e:
-            # 流式写入中途失败时清理占位空文件，避免重试时 unique_path 跳过它
-            if safe_path and os.path.exists(safe_path) and os.path.getsize(safe_path) == 0:
+            # 流式写入中途失败时清理残留文件（含空占位和 partial 写入），
+            # 避免重试时 unique_path 跳过它而留下损坏文件
+            if safe_path and os.path.exists(safe_path):
                 try:
                     os.remove(safe_path)
                 except OSError:
@@ -165,7 +166,7 @@ def extract_video_url(video):
             return master, None
         return None, "h264 流存在但缺少 masterUrl"
     # 兜底：直接挂在 video 上的 url
-    direct = video.get("url")
+    direct = (video or {}).get("url")
     if direct:
         return direct, None
     return None, "无 stream/h264 也无顶层 url"
@@ -233,6 +234,7 @@ def _fetch_page(session, url, headers, max_retries=5):
 
 
 def download_xhs_media(url, cookie):
+    start_time = time.time()
     # 每次解析新链接都生成一个全新的随机 Header
     headers = get_headers(cookie)
 
@@ -244,6 +246,7 @@ def download_xhs_media(url, cookie):
 
     response = _fetch_page(session, url, headers)
     if response is None:
+        logger.error("请求失败，耗时 %.1f 秒。", time.time() - start_time)
         return
 
     html = response.text
@@ -252,7 +255,8 @@ def download_xhs_media(url, cookie):
     if detect_risk_control(html, response):
         logger.error(
             "提取失败：触发风控拦截或 Cookie 已失效（可能被重定向到验证页）。"
-            "请在浏览器中打开链接完成验证后重试。"
+            "请在浏览器中打开链接完成验证后重试。（耗时 %.1f 秒）",
+            time.time() - start_time,
         )
         return
 
@@ -261,14 +265,15 @@ def download_xhs_media(url, cookie):
     if detect_note_not_found(html, response.url if response is not None else ""):
         logger.error(
             "提取失败：该笔记已被删除或不存在（小红书返回 404）。"
-            "请确认链接是否有效或已被作者删除。"
+            "请确认链接是否有效或已被作者删除。（耗时 %.1f 秒）",
+            time.time() - start_time,
         )
         return
 
     # 贪婪匹配到最后一个 } 后接 </script>，避免被内部 }</script> 截断
     state_match = re.search(r"window\.__INITIAL_STATE__\s*=\s*(\{.*\})\s*</script>", html, re.DOTALL)
     if not state_match:
-        logger.error("未能找到页面数据。可能是页面结构变更或 Cookie 失效。")
+        logger.error("未能找到页面数据。可能是页面结构变更或 Cookie 失效。（耗时 %.1f 秒）", time.time() - start_time)
         return
 
     try:
@@ -276,20 +281,20 @@ def download_xhs_media(url, cookie):
         state_json = normalize_xhs_state_json(state_match.group(1))
         data = json.loads(state_json)
     except json.JSONDecodeError as e:
-        logger.error("JSON 解析失败: %s", e)
+        logger.error("JSON 解析失败: %s（耗时 %.1f 秒）", e, time.time() - start_time)
         return
 
     try:
         note_data = data.get("note", {}).get("noteDetailMap", {})
         if not note_data:
-            logger.error("提取详情失败，页面结构可能已更新。")
+            logger.error("提取详情失败，页面结构可能已更新。（耗时 %.1f 秒）", time.time() - start_time)
             return
 
         note_id = list(note_data.keys())[0]
         note = note_data[note_id].get("note", {})
 
-        title = note.get("title", f"xhs_{note_id}")
-        safe_title = sanitize_filename(title) or f"xhs_{note_id}"
+        title = note.get("title", "")
+        safe_title = sanitize_filename(title) if title and title.strip() else f"xhs_{note_id}"
 
         # 作者：note.user 上的 nickname/nickName（接口曾变更大小写，双 key 兼容）
         author = extract_xhs_author(note)
@@ -339,13 +344,29 @@ def download_xhs_media(url, cookie):
                 ]
 
                 # as_completed 允许我们在任意一个线程完成时立即打印结果，而不用等待所有任务结束
+                succeeded = 0
+                failed = 0
                 for future in as_completed(futures):
-                    logger.info("%s", future.result())
+                    result = future.result()
+                    if result.startswith("  [失败]"):
+                        failed += 1
+                        logger.error("%s", result)
+                    else:
+                        succeeded += 1
+                        logger.info("%s", result)
 
-        logger.info("该链接下载任务完成！")
+                elapsed = time.time() - start_time
+                logger.info(
+                    "下载完成：%d 成功 / %d 失败 / 共 %d 项，耗时 %.1f 秒",
+                    succeeded, failed, len(download_tasks), elapsed,
+                )
+        else:
+            logger.info("未发现可下载的媒体文件，耗时 %.1f 秒。", time.time() - start_time)
+
+        logger.info("该链接处理完成，耗时 %.1f 秒。", time.time() - start_time)
 
     except Exception as e:
-        logger.error("解析数据时发生意外错误: %s", e)
+        logger.error("解析数据时发生意外错误: %s（耗时 %.1f 秒）", e, time.time() - start_time, exc_info=True)
 
 
 if __name__ == "__main__":
@@ -358,7 +379,7 @@ if __name__ == "__main__":
             break
 
         if raw_input.lower() == "q":
-            logger.info("退出程序")
+            print("👋 退出程序")
             break
 
         if not raw_input:

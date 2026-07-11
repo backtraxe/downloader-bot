@@ -155,3 +155,66 @@ class TestIsTransientError:
         from xhs_downloader import _is_transient_error
         err = Exception("403 Client Error: Forbidden")
         assert _is_transient_error(err) is False
+
+
+# ---------------- extract_video_url ----------------
+
+class TestExtractVideoUrl:
+    """视频直链解析测试，覆盖三个分支：h264 masterUrl / 顶层 url / 都没有。"""
+
+    def test_h264_master_url(self):
+        from xhs_downloader import extract_video_url
+        video = {"media": {"stream": {"h264": [{"masterUrl": "https://cdn.example.com/v.mp4"}]}}}
+        url, reason = extract_video_url(video)
+        assert url == "https://cdn.example.com/v.mp4"
+        assert reason is None
+
+    def test_h264_list_missing_master_url(self):
+        from xhs_downloader import extract_video_url
+        video = {"media": {"stream": {"h264": [{"backupUrls": ["x"]}]}}}
+        url, reason = extract_video_url(video)
+        assert url is None
+        assert reason == "h264 流存在但缺少 masterUrl"
+
+    def test_h264_first_element_none(self):
+        # h264 列表首元素为 None 时不崩溃，走兜底
+        from xhs_downloader import extract_video_url
+        video = {"media": {"stream": {"h264": [None]}}, "url": "https://cdn.example.com/fallback.mp4"}
+        url, reason = extract_video_url(video)
+        assert url is None
+        assert reason == "h264 流存在但缺少 masterUrl"
+
+    def test_fallback_to_top_level_url(self):
+        from xhs_downloader import extract_video_url
+        video = {"url": "https://cdn.example.com/direct.mp4"}
+        url, reason = extract_video_url(video)
+        assert url == "https://cdn.example.com/direct.mp4"
+        assert reason is None
+
+    def test_no_stream_no_url_returns_reason(self):
+        from xhs_downloader import extract_video_url
+        url, reason = extract_video_url({})
+        assert url is None
+        assert reason == "无 stream/h264 也无顶层 url"
+
+    def test_none_video_returns_reason(self):
+        from xhs_downloader import extract_video_url
+        url, reason = extract_video_url(None)
+        assert url is None
+        assert reason == "无 stream/h264 也无顶层 url"
+
+    def test_empty_h264_list_falls_back_to_url(self):
+        # h264 为空列表时不进 h264 分支，走顶层 url 兜底
+        from xhs_downloader import extract_video_url
+        video = {"media": {"stream": {"h264": []}}, "url": "https://cdn.example.com/fallback.mp4"}
+        url, reason = extract_video_url(video)
+        assert url == "https://cdn.example.com/fallback.mp4"
+        assert reason is None
+
+    def test_h264_not_list_falls_back_to_url(self):
+    # h264 不是 list（如误传 dict）时不进 h264 分支
+        from xhs_downloader import extract_video_url
+        video = {"media": {"stream": {"h264": "not-a-list"}}, "url": "https://cdn.example.com/fallback.mp4"}
+        url, reason = extract_video_url(video)
+        assert url == "https://cdn.example.com/fallback.mp4"
+        assert reason is None
