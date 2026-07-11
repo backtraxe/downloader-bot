@@ -218,3 +218,37 @@ class TestExtractVideoUrl:
         url, reason = extract_video_url(video)
         assert url == "https://cdn.example.com/fallback.mp4"
         assert reason is None
+
+
+# ---------------- 标题兜底逻辑 ----------------
+
+class TestTitleFallback:
+    """标题为空/None/纯特殊字符时应回退 xhs_<noteId>，而非 untitled。
+    真实案例：http://xhslink.com/o/6DR1V8jhJ56 的 title 返回 "/"，清洗后为空。"""
+
+    def _safe_title(self, title, note_id="abc123"):
+        from utils import sanitize_filename
+        return sanitize_filename(title, default="") or f"xhs_{note_id}"
+
+    def test_slash_title_falls_back(self):
+        # 真实案例：title 返回 "/"
+        assert self._safe_title("/") == "xhs_abc123"
+
+    def test_none_title_falls_back(self):
+        assert self._safe_title(None) == "xhs_abc123"
+
+    def test_empty_string_falls_back(self):
+        assert self._safe_title("") == "xhs_abc123"
+
+    def test_whitespace_falls_back(self):
+        assert self._safe_title("   ") == "xhs_abc123"
+
+    def test_pure_special_chars_fall_back(self):
+        assert self._safe_title("*?:<>|") == "xhs_abc123"
+
+    def test_normal_title_preserved(self):
+        assert self._safe_title("我的笔记") == "我的笔记"
+
+    def test_title_with_special_chars_cleaned(self):
+        # 含特殊字符但清洗后非空，保留
+        assert self._safe_title("你好/世界") == "你好世界"

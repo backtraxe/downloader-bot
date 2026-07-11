@@ -294,7 +294,10 @@ def download_xhs_media(url, cookie):
         note = note_data[note_id].get("note", {})
 
         title = note.get("title", "")
-        safe_title = sanitize_filename(title) if title and title.strip() else f"xhs_{note_id}"
+        # title 可能为 None（undefined->null）、空串、纯特殊字符（如 "/"）
+        # sanitize_filename 会把纯特殊字符清洗为空并返回 "untitled"，
+        # 这些情况统一回退到 xhs_<noteId>，避免多篇无标题笔记都落到 untitled 目录
+        safe_title = sanitize_filename(title, default="") or f"xhs_{note_id}"
 
         # 作者：note.user 上的 nickname/nickName（接口曾变更大小写，双 key 兼容）
         author = extract_xhs_author(note)
