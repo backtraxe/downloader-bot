@@ -2,6 +2,8 @@
 """downloader.py 纯函数单元测试（无网络依赖）"""
 import os
 
+import pytest
+
 from downloader import build_ydl_opts, resolve_uploader
 
 
@@ -52,3 +54,60 @@ class TestBuildYdlOptsAuthor:
 
     def test_merge_output_format_mp4(self):
         assert build_ydl_opts("youtube")["merge_output_format"] == "mp4"
+
+
+# ---------------- dispatch_url 路由 ----------------
+
+class TestDispatchUrl:
+    """dispatch_url 按 site_name 分发到对应下载器，不触网。"""
+
+    def test_xiaohongshu_routes_to_xhs(self, monkeypatch):
+        import downloader
+
+        calls = []
+        monkeypatch.setattr("sites.load_cookie_for_url", lambda url: "fake_cookie")
+        monkeypatch.setattr(
+            "xhs_downloader.download_xhs_media",
+            lambda url, cookie: calls.append(("xhs", url, cookie)),
+        )
+        downloader.dispatch_url("https://www.xiaohongshu.com/explore/abc")
+        assert calls == [("xhs", "https://www.xiaohongshu.com/explore/abc", "fake_cookie")]
+
+    def test_xiaohongshu_no_cookie_skips_download(self, monkeypatch):
+        import downloader
+
+        calls = []
+        monkeypatch.setattr("sites.load_cookie_for_url", lambda url: None)
+        monkeypatch.setattr(
+            "xhs_downloader.download_xhs_media",
+            lambda url, cookie: calls.append(("xhs", url, cookie)),
+        )
+        # Cookie 为空时不应调用 xhs 下载
+        downloader.dispatch_url("https://xhslink.com/abc")
+        assert calls == []
+
+    @pytest.mark.parametrize("url", [
+        "https://www.youtube.com/watch?v=abc",
+        "https://www.bilibili.com/video/BV1xx",
+        "https://www.douyin.com/video/123",
+        "https://www.instagram.com/p/Cabc/",
+        "https://x.com/user/status/123",
+    ])
+    def test_ytdlp_sites_route_to_download_url(self, url, monkeypatch):
+        import downloader
+
+        calls = []
+        monkeypatch.setattr("downloader.download_url", lambda u: calls.append(u))
+        downloader.dispatch_url(url)
+        assert calls == [url]
+
+    def test_unknown_site_routes_to_1024(self, monkeypatch):
+        import downloader
+
+        calls = []
+        monkeypatch.setattr(
+            "1024_downloader.extract_general_media",
+            lambda url: calls.append(url),
+        )
+        downloader.dispatch_url("https://example.com/some/page")
+        assert calls == ["https://example.com/some/page"]

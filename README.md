@@ -10,47 +10,40 @@ pip install -r requirements.txt
 
 ## 使用
 
-脚本都是交互式 prompt，反复输入链接下载，输入 `q` 退出。
-
-### `downloader.py` — 多站点统一入口（推荐）
+### `downloader.py` — 统一入口（推荐）
 
 ```bash
 python downloader.py
 ```
 
-底层由 [yt-dlp](https://github.com/yt-dlp/yt-dlp) 接管，按 URL 自动识别站点，支持：
+输入链接后脚本按 URL 自动识别站点并分发到对应下载器，无需手动选脚本：
 
-| 站点 | 域名 | Cookie |
-|------|------|--------|
-| YouTube | `youtube.com` / `youtu.be` | 通常不需要 |
-| Bilibili | `bilibili.com` / `b23.tv` | 建议（下高清需要） |
-| 抖音 | `douyin.com` / `v.douyin.com` | 建议 |
-| Instagram | `instagram.com` | 强烈建议（否则大概率失败） |
-| X(Twitter) | `x.com` / `twitter.com` / `t.co` | 通常不需要 |
+| 站点 | 域名 | 后端 | Cookie |
+|------|------|------|--------|
+| 小红书 | `xiaohongshu.com` / `xhslink.com` | 手写 `__INITIAL_STATE__` 解析 | 建议 |
+| YouTube | `youtube.com` / `youtu.be` | yt-dlp | 通常不需要 |
+| Bilibili | `bilibili.com` / `b23.tv` | yt-dlp | 建议（下高清需要） |
+| 抖音 | `douyin.com` / `v.douyin.com` | yt-dlp | 建议 |
+| Instagram | `instagram.com` | yt-dlp | 强烈建议（否则大概率失败） |
+| X(Twitter) | `x.com` / `twitter.com` / `t.co` | yt-dlp | 通常不需要 |
+| 其他网站 | 任意 | 通用静态网页抓取 | 按域名命名 |
 
-- Cookie 从 `cookies/<站点名>.txt` 读取（youtube/bilibili/douyin/instagram/twitter）
-- 输出到 `download/<站点>/<标题>.mp4`
+- Cookie 从 `cookies/<站点名>.txt` 读取
+- 输出到 `download/<站点>[/<作者>]/<标题>.<ext>`
 
-### `xhs_downloader.py` — 小红书笔记下载
+三个下载脚本也可单独运行（`python xhs_downloader.py` / `python 1024_downloader.py`），行为与统一入口一致。
 
-```bash
-python xhs_downloader.py
-```
+#### 小红书后端
 
 - 手写解析 `window.__INITIAL_STATE__`，提取图片列表和视频流（比 yt-dlp 对小红书更可控）
 - 支持 `xhslink.com` 短链与 App 分享链接（含 `xsec_token`），脚本会跟随重定向到 `xiaohongshu.com` 后再解析
 - 需要在 `cookies/xiaohongshu.txt` 中填入浏览器 Cookie；文件不存在或为空时脚本会自动创建并提示
 
-### `1024_downloader.py` — 通用网页媒体抓取
-
-```bash
-python 1024_downloader.py
-```
+#### 通用网页后端
 
 - 使用 `curl_cffi` 的 `impersonate="chrome110"` 做 TLS 指纹伪装，绕过防盗链 / CDN 拦截
 - 深度扫描 `<img>/<source>/<video>` 的懒加载属性（`data-src`、`data-original`、`ess-data` 等）、`<a href>` 直链、以及行内 `style` 中的 `background-image`
 - 下载时带 `Referer`（破解防盗链的关键），并发下载（`max_workers=5`）
-- 输出到 `download/<域名>_<标题前缀>/`
 
 ## 目录约定
 

@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """统一媒体下载入口。
 
-支持 bilibili / douyin / youtube / instagram / x(twitter) 等站点，
-底层由 yt-dlp 统一接管。按 URL 自动识别站点，从 cookies/<site>.txt 读取 Cookie。
+按 URL 自动识别站点并分发到对应下载器：
+  - xiaohongshu → xhs_downloader（手写 __INITIAL_STATE__ 解析）
+  - bilibili / douyin / youtube / instagram / twitter → yt-dlp
+  - 其他站点 → 1024_downloader（通用静态网页抓取）
 
 用法：
     python downloader.py
@@ -114,6 +116,40 @@ def diagnose_error(err_msg):
     return "unknown", err_msg
 
 
+
+# yt-dlp 接管的站点集合；其余已知站点走专用解析器或通用抓取
+_YTDLP_SITES = frozenset(SITE_REQUIRE_COOKIE.keys()) - {"xiaohongshu"}
+
+
+def dispatch_url(url):
+    """统一入口：按站点自动分发到对应下载器。
+
+    xiaohongshu → xhs_downloader（手写解析，需 Cookie）
+    yt-dlp 站点  → download_url（bilibili / douyin / youtube / instagram / twitter）
+    其他站点     → 1024_downloader（通用静态网页抓取）
+    """
+    site_name = get_site_name(url)
+
+    if site_name == "xiaohongshu":
+        # 延迟导入避免循环依赖与不必要的模块初始化
+        from sites import load_cookie_for_url
+        from xhs_downloader import download_xhs_media
+
+        cookie = load_cookie_for_url(url)
+        if cookie:
+            download_xhs_media(url, cookie)
+        return
+
+    if site_name in _YTDLP_SITES:
+        download_url(url)
+        return
+
+    # 未知站点：交给通用静态网页抓取器
+    from importlib import import_module
+    mod = import_module("1024_downloader")
+    mod.extract_general_media(url)
+
+
 def download_url(url):
     """下载单个 URL。自动识别站点并应用对应 cookie。"""
     site_name = get_site_name(url)
@@ -162,7 +198,7 @@ def download_url(url):
 
 
 def main():
-    logger.info("🚀 统一下载器（yt-dlp）支持: youtube / bilibili / douyin / instagram / x 等")
+    logger.info("🚀 统一下载器支持: 小红书 / bilibili / douyin / youtube / instagram / x / 任意网页")
     logger.info("输入 q 退出")
     while True:
         try:
@@ -183,7 +219,7 @@ def main():
             continue
 
         for target_url in urls:
-            download_url(target_url)
+            dispatch_url(target_url)
 
 
 if __name__ == "__main__":
