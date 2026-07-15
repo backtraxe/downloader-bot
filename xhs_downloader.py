@@ -366,6 +366,7 @@ def download_xhs_media(url, cookie):
         else:
             logger.info("未发现可下载的媒体文件，耗时 %.1f 秒。", time.time() - start_time)
 
+        logger.info("📁 保存目录: %s", os.path.abspath(base_path))
         logger.info("该链接处理完成，耗时 %.1f 秒。", time.time() - start_time)
 
     except Exception as e:

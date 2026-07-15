@@ -188,6 +188,7 @@ def extract_general_media(url):
         for future in as_completed(futures):
             logger.info("%s", future.result())
 
+    logger.info("📁 保存目录: %s", os.path.abspath(base_path))
     logger.info("该网页媒体下载任务完成！")
 
 

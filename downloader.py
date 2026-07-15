@@ -183,7 +183,10 @@ def download_url(url):
             # 再 extract 并下载；失败给出明确原因
             info = ydl.extract_info(url, download=True)
             title = sanitize_filename(info.get("title", "untitled")) if info else "untitled"
-            logger.info("🎉 下载完成: %s", title)
+            # 从最终文件路径取目录，向用户展示本地保存位置
+            final_file = ydl.prepare_filename(info) if info else ""
+            save_dir = os.path.dirname(final_file) or os.path.join(DOWNLOAD_DIR, site_name)
+            logger.info("🎉 下载完成: %s → %s", title, os.path.abspath(save_dir))
             return True
     except DownloadError as e:
         kind, msg = diagnose_error(str(e))
