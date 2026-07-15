@@ -12,6 +12,7 @@
 """
 import os
 import sys
+import time
 
 import yt_dlp
 from yt_dlp.utils import DownloadError
@@ -167,6 +168,7 @@ def download_url(url):
                            site_name, site_name)
 
     logger.info("开始下载: %s", url)
+    start_time = time.time()
 
     try:
         # 两段式：先探一次拿作者（uploader），再按作者层构造 outtmpl 下载。
@@ -186,17 +188,20 @@ def download_url(url):
             # 从最终文件路径取目录，向用户展示本地保存位置
             final_file = ydl.prepare_filename(info) if info else ""
             save_dir = os.path.dirname(final_file) or os.path.join(DOWNLOAD_DIR, site_name)
-            logger.info("🎉 下载完成: %s → %s", title, os.path.abspath(save_dir))
+            elapsed = time.time() - start_time
+            logger.info("🎉 下载完成: %s → %s（耗时 %.1f 秒）", title, os.path.abspath(save_dir), elapsed)
             return True
     except DownloadError as e:
+        elapsed = time.time() - start_time
         kind, msg = diagnose_error(str(e))
         if kind == "need_login":
-            logger.error("❌ 下载失败（需登录）: %s", msg)
+            logger.error("❌ 下载失败（需登录）: %s（耗时 %.1f 秒）", msg, elapsed)
         else:
-            logger.error("❌ 下载失败: %s", msg)
+            logger.error("❌ 下载失败: %s（耗时 %.1f 秒）", msg, elapsed)
         return False
     except Exception as e:  # noqa: BLE001 顶层兜底，避免 prompt 循环中断
-        logger.error("❌ 意外错误: %s", e)
+        elapsed = time.time() - start_time
+        logger.error("❌ 意外错误: %s（耗时 %.1f 秒）", e, elapsed)
         return False
 
 

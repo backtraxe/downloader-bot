@@ -86,6 +86,7 @@ def download_file(session, url, filepath, page_url):
 
 def extract_general_media(url):
     """深度解析并下载静态网站的隐藏媒体文件"""
+    start_time = time.time()
     headers = get_headers()
     session = requests.Session()
 
@@ -95,7 +96,7 @@ def extract_general_media(url):
         response = session.get(url, headers=headers, timeout=15)
         response.raise_for_status()
     except Exception as e:
-        logger.error("请求失败: %s", e)
+        logger.error("请求失败: %s（耗时 %.1f 秒）", e, time.time() - start_time)
         return
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -164,7 +165,7 @@ def extract_general_media(url):
     # ==========================
 
     if not media_urls:
-        logger.error("深度扫描后依然没有发现媒体文件。")
+        logger.error("深度扫描后依然没有发现媒体文件。（耗时 %.1f 秒）", time.time() - start_time)
         return
 
     logger.info("深度扫描完成！共发现 %d 个媒体文件，开始下载...", len(media_urls))
@@ -188,8 +189,9 @@ def extract_general_media(url):
         for future in as_completed(futures):
             logger.info("%s", future.result())
 
+    elapsed = time.time() - start_time
     logger.info("📁 保存目录: %s", os.path.abspath(base_path))
-    logger.info("该网页媒体下载任务完成！")
+    logger.info("该网页媒体下载任务完成！（耗时 %.1f 秒）", elapsed)
 
 
 if __name__ == "__main__":
