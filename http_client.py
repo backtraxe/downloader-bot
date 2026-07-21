@@ -30,17 +30,11 @@ _CURL_BIN = shutil.which("curl")
 if not _CURL_BIN and not _HAS_CURL_CFFI:
     logger.error("系统 curl 命令也未找到，HTTP 请求将无法发送")
 
-# curl-impersonate 风格的浏览器指纹参数（尽量贴近 Chrome 110）
+# 系统 curl（非 curl-impersonate 分支）无法做真正的 JA3 指纹伪装，
+# 硬编码 cipher/curve 反而会导致 TLS 握手失败（error: tlsv1 alert protocol version）。
+# 这里只保留 --http2：HTTP/2 + 正确的浏览器请求头已足以应对大多数场景。
 _CURL_IMPERSONATE_FLAGS = [
     "--http2",
-    "--tlsv1.3",
-    "--ciphers",
-    "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:"
-    "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:"
-    "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:"
-    "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305",
-    "--curves",
-    "X25519:secp256r1:secp384r1",
 ]
 
 
