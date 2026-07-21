@@ -111,3 +111,33 @@ class TestDispatchUrl:
         )
         downloader.dispatch_url("https://example.com/some/page")
         assert calls == ["https://example.com/some/page"]
+
+
+class TestDiagnoseError:
+    """diagnose_error 区分登录、瞬时、未知三类。"""
+
+    def test_login_hint(self):
+        from downloader import diagnose_error
+        kind, _ = diagnose_error("Login required to access this video")
+        assert kind == "need_login"
+
+    def test_transient_ssl_eof(self):
+        from downloader import diagnose_error
+        kind, _ = diagnose_error("Got error: SSL: UNEXPECTED_EOF_WHILE_READING EOF occurred in violation of protocol")
+        assert kind == "transient"
+
+    def test_transient_connection_reset(self):
+        from downloader import diagnose_error
+        kind, _ = diagnose_error("Connection reset by peer")
+        assert kind == "transient"
+
+    def test_transient_timeout(self):
+        from downloader import diagnose_error
+        kind, _ = diagnose_error("Read timed out")
+        assert kind == "transient"
+
+    def test_unknown(self):
+        from downloader import diagnose_error
+        kind, msg = diagnose_error("some weird error")
+        assert kind == "unknown"
+        assert msg == "some weird error"

@@ -11,6 +11,7 @@
 然后反复输入链接下载，输入 q 退出。
 """
 import os
+import random
 import sys
 import time
 
@@ -93,6 +94,10 @@ def build_ydl_opts(site_name, author=""):
         "cookiefile": cookiefile,
         # 文件名冲突不覆盖：yt-dlp 自带带序号后缀
         "nopart": False,
+        # 瞬时网络错误（SSL EOF、连接重置、超时）多撑几轮再放弃，
+        # 单次分片失败不再直接让整个下载挂掉
+        "retries": 10,
+        "fragment_retries": 10,
         "progress_hooks": [_on_progress],
     }
 
@@ -109,11 +114,40 @@ def _on_progress(d):
         logger.error("❌ 出错: %s", d.get("filename", ""))
 
 
+# 瞬时网络错误关键字：SSL 握手中断、连接重置、超时等——值得整链重试
+_TRANSIENT_KEYWORDS = (
+    "unexpected_eof_while_reading",   # SSL 握手中断
+    "eof occurred in violation",       # SSL 协议异常
+    "ssl: wrong_version_number",       # SSL 版本不匹配
+    "connection reset",               # 连接被重置
+    "connection aborted",             # 连接中断
+    "connection broken",              # 连接断开
+    "read timed out",                 # 读取超时
+    "connect timeout",                # 连接超时
+    "timeout",                        # 通用超时
+    "max retries exceeded",           # 连接池耗尽
+    "temporary failure",              # DNS 临时失败
+    "no address associated",          # DNS 解析失败
+    "name or service not known",      # DNS 解析失败 (Linux)
+    "nodename nor servname",          # DNS 解析失败 (macOS)
+    "503",                            # 服务暂时不可用
+    "502",                            # 网关错误
+)
+
+
 def diagnose_error(err_msg):
-    """把 yt-dlp 的错误信息翻译成可读提示。返回 (kind, message)。"""
+    """把 yt-dlp 的错误信息翻译成可读提示。返回 (kind, message)。
+
+    kind 取值：
+      need_login  —— 登录/Cookie 相关，重试无益
+      transient  —— 瞬时网络错误，值得整链重试
+      unknown     —— 其他，原样回显
+    """
     low = (err_msg or "").lower()
     if any(k.lower() in low for k in _LOGIN_HINTS):
         return "need_login", "该内容可能需要登录或 Cookie 失效，请检查 cookies/<站点>.txt"
+    if any(kw in low for kw in _TRANSIENT_KEYWORDS):
+        return "transient", err_msg
     return "unknown", err_msg
 
 
@@ -168,41 +202,64 @@ def download_url(url):
                            site_name, site_name)
 
     logger.info("开始下载: %s", url)
-    start_time = time.time()
 
-    try:
-        # 两段式：先探一次拿作者（uploader），再按作者层构造 outtmpl 下载。
-        # 代价是多一次请求；收益是作者缺失时自然退化为无作者层（无 NA/ 占位）。
-        probe_opts = {k: v for k, v in build_ydl_opts(site_name).items()
-                      if k in ("cookiefile", "quiet", "noprogress", "no_warnings")}
-        author = ""
-        with yt_dlp.YoutubeDL(probe_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            author = resolve_uploader(info)
+    max_attempts = 3  # 瞬时网络错误（SSL EOF、连接重置等）整链最多重试 3 次
+    for attempt in range(1, max_attempts + 1):
+        try:
+            # 两段式：先探一次拿作者（uploader），再按作者层构造 outtmpl 下载。
+            # 代价是多一次请求；收益是作者缺失时自然退化为无作者层（无 NA/ 占位）。
+            probe_opts = {k: v for k, v in build_ydl_opts(site_name).items()
+                          if k in ("cookiefile", "quiet", "noprogress", "no_warnings")}
+            author = ""
+            with yt_dlp.YoutubeDL(probe_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                author = resolve_uploader(info)
 
-        opts = build_ydl_opts(site_name, author=author)
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            # 再 extract 并下载；失败给出明确原因
-            info = ydl.extract_info(url, download=True)
-            title = sanitize_filename(info.get("title", "untitled")) if info else "untitled"
-            # 从最终文件路径取目录，向用户展示本地保存位置
-            final_file = ydl.prepare_filename(info) if info else ""
-            save_dir = os.path.dirname(final_file) or os.path.join(DOWNLOAD_DIR, site_name)
+            opts = build_ydl_opts(site_name, author=author)
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                # 再 extract 并下载；失败给出明确原因
+                info = ydl.extract_info(url, download=True)
+                title = sanitize_filename(info.get("title", "untitled")) if info else "untitled"
+                # 从最终文件路径取目录，向用户展示本地保存位置
+                final_file = ydl.prepare_filename(info) if info else ""
+                save_dir = os.path.dirname(final_file) or os.path.join(DOWNLOAD_DIR, site_name)
+                elapsed = time.time() - start_time
+                logger.info("🎉 下载完成: %s → %s（耗时 %.1f 秒）", title, os.path.abspath(save_dir), elapsed)
+                return True
+        except DownloadError as e:
             elapsed = time.time() - start_time
-            logger.info("🎉 下载完成: %s → %s（耗时 %.1f 秒）", title, os.path.abspath(save_dir), elapsed)
-            return True
-    except DownloadError as e:
-        elapsed = time.time() - start_time
-        kind, msg = diagnose_error(str(e))
-        if kind == "need_login":
-            logger.error("❌ 下载失败（需登录）: %s（耗时 %.1f 秒）", msg, elapsed)
-        else:
-            logger.error("❌ 下载失败: %s（耗时 %.1f 秒）", msg, elapsed)
-        return False
-    except Exception as e:  # noqa: BLE001 顶层兜底，避免 prompt 循环中断
-        elapsed = time.time() - start_time
-        logger.error("❌ 意外错误: %s（耗时 %.1f 秒）", e, elapsed)
-        return False
+            kind, msg = diagnose_error(str(e))
+            # 瞬时网络错误：退避后整链重试，不立刻判定失败
+            if kind == "transient" and attempt < max_attempts:
+                wait = attempt * 3 + random.uniform(0, 2)
+                logger.warning(
+                    "⚠️ 网络瞬时错误（第 %d/%d 次），%.1fs 后重试: %s",
+                    attempt, max_attempts, wait, msg,
+                )
+                time.sleep(wait)
+                continue
+            if kind == "need_login":
+                logger.error("❌ 下载失败（需登录）: %s（耗时 %.1f 秒）", msg, elapsed)
+            else:
+                logger.error("❌ 下载失败: %s（耗时 %.1f 秒）", msg, elapsed)
+            return False
+        except Exception as e:  # noqa: BLE001 顶层兜底，避免 prompt 循环中断
+            elapsed = time.time() - start_time
+            kind, msg = diagnose_error(str(e))
+            if kind == "transient" and attempt < max_attempts:
+                wait = attempt * 3 + random.uniform(0, 2)
+                logger.warning(
+                    "⚠️ 网络瞬时错误（第 %d/%d 次），%.1fs 后重试: %s",
+                    attempt, max_attempts, wait, msg,
+                )
+                time.sleep(wait)
+                continue
+            logger.error("❌ 意外错误: %s（耗时 %.1f 秒）", e, elapsed)
+            return False
+    # 瞬时错误重试用尽
+    elapsed = time.time() - start_time
+    logger.error("❌ 下载失败: 多次重试仍遇瞬时网络错误（耗时 %.1f 秒）", elapsed)
+    return False
 
 
 def main():
