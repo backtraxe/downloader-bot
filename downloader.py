@@ -202,6 +202,7 @@ def download_url(url):
                            site_name, site_name)
 
     logger.info("开始下载: %s", url)
+    start_time = time.time()
 
     max_attempts = 3  # 瞬时网络错误（SSL EOF、连接重置等）整链最多重试 3 次
     for attempt in range(1, max_attempts + 1):
