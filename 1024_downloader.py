@@ -1,4 +1,15 @@
-from curl_cffi import requests
+try:
+    from curl_cffi import requests as _cffi_requests
+    _HAS_CURL_CFFI = True
+except Exception as _cffi_err:  # noqa: BLE001  # Termux/Python 版本不匹配等环境问题
+    import requests as _cffi_requests
+    _HAS_CURL_CFFI = False
+    import logging as _logging_mod
+    _logging_mod.getLogger("downloader").warning(
+        "curl_cffi 不可用，降级为 requests（无 TLS 指纹伪装）。原因: %s", _cffi_err
+    )
+# 统一别名，后续代码用 requests 即可
+requests = _cffi_requests
 import os
 import re
 import time
@@ -57,8 +68,11 @@ def download_file(session, url, filepath, page_url):
         # 稍微把延迟调大一点，避免瞬间并发被封 IP
         time.sleep(random.uniform(0.5, 1.5))
 
-        # 使用 impersonate 完美伪装成 Chrome 110 浏览器
-        r = session.get(url, headers=img_headers, stream=True, timeout=30, impersonate="chrome110")
+        # curl_cffi 可用时用 impersonate 伪装 TLS 指纹；否则降级为普通 requests
+        _kw = {"headers": img_headers, "stream": True, "timeout": 30}
+        if _HAS_CURL_CFFI:
+            _kw["impersonate"] = "chrome110"
+        r = session.get(url, **_kw)
         r.raise_for_status()
 
         # 验证一下下载下来的到底是不是真实图片
