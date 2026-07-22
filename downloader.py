@@ -69,7 +69,7 @@ def resolve_short_link(url):
             logger.info("短链展开: %s → %s", url, final_url)
             return final_url
     except Exception as e:
-        logger.debug("短链展开失败，回退原 URL: %s（%s）", url, e)
+        logger.warning("⚠️ 短链展开失败，回退原 URL: %s（%s）", url, e)
     return url
 
 # 需要登录 / 常见失败的错误关键字 → 可读提示
@@ -246,7 +246,10 @@ def download_url(url):
 
     # 短链（b23.tv / v.douyin.com 等）先展开为最终 URL，
     # 避免 yt-dlp 在 DNS 解析阶段就失败
-    url = resolve_short_link(url)
+    resolved = resolve_short_link(url)
+    if resolved == url and urlparse(url).netloc.lower() in _SHORT_LINK_DOMAINS:
+        logger.warning("⚠️ 短链展开失败，yt-dlp 可能因 DNS 解析报错: %s", url)
+    url = resolved
 
     logger.info("开始下载: %s", url)
     start_time = time.time()
