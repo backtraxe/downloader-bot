@@ -24,10 +24,53 @@ from sites import (
     get_site_name,
 )
 from utils import extract_urls, sanitize_filename, setup_logging
+from urllib.parse import urljoin, urlparse
 
 logger = setup_logging()
 
 DOWNLOAD_DIR = "download"
+
+# 已知短链域名——yt-dlp 可能没有专用 extractor，需先展开为最终 URL
+_SHORT_LINK_DOMAINS = frozenset((
+    "b23.tv",         # bilibili 短链
+    "v.douyin.com",   # 抖音短链
+    "youtu.be",       # YouTube 短链
+    "t.co",           # Twitter/X 短链
+    "instagr.am",     # Instagram 短链
+    "xhslink.com",    # 小红书短链（xhs_downloader 自行处理，这里兜底）
+))
+
+
+def resolve_short_link(url):
+    """用 http_client（curl_cffi / 系统 curl）展开短链为最终 URL。
+
+    yt-dlp 依赖 Python socket 做 DNS 解析，部分环境（沙箱、Termux）
+    socket.getaddrinfo 对短链域名（如 b23.tv）解析失败，而 curl 自带
+    解析器可正常工作。此函数在交给 yt-dlp 前先用 curl 跟一遍重定向，
+    拿到最终直链，避免 yt-dlp 卡在 DNS 解析阶段。
+
+    非短链直接原样返回，不产生额外请求。
+    """
+    domain = urlparse(url).netloc.lower()
+    if domain not in _SHORT_LINK_DOMAINS:
+        return url
+
+    try:
+        from http_client import get as http_get
+        # curl_cffi 默认自动跟随重定向，r.url 即最终 URL
+        r = http_get(url, timeout=10, impersonate="chrome110")
+        final_url = getattr(r, "url", None) or url
+        # 系统 curl 降级模式不自动跟随，手动读 Location
+        if 300 <= r.status_code < 400:
+            location = r.headers.get("location")
+            if location:
+                final_url = urljoin(url, location)
+        if final_url and final_url != url:
+            logger.info("短链展开: %s → %s", url, final_url)
+            return final_url
+    except Exception as e:
+        logger.debug("短链展开失败，回退原 URL: %s（%s）", url, e)
+    return url
 
 # 需要登录 / 常见失败的错误关键字 → 可读提示
 _LOGIN_HINTS = (
@@ -200,6 +243,10 @@ def download_url(url):
         if SITE_REQUIRE_COOKIE.get(site_name) == "强烈建议":
             logger.warning("⚠️ %s 强烈建议填写 Cookie（cookies/%s.txt），否则大概率失败。",
                            site_name, site_name)
+
+    # 短链（b23.tv / v.douyin.com 等）先展开为最终 URL，
+    # 避免 yt-dlp 在 DNS 解析阶段就失败
+    url = resolve_short_link(url)
 
     logger.info("开始下载: %s", url)
     start_time = time.time()

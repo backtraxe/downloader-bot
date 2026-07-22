@@ -141,3 +141,70 @@ class TestDiagnoseError:
         kind, msg = diagnose_error("some weird error")
         assert kind == "unknown"
         assert msg == "some weird error"
+
+
+# ---------------- resolve_short_link ----------------
+
+class TestResolveShortLink:
+    """resolve_short_link 对非短链直接返回，对短链用 http_client 展开。"""
+
+    def test_non_short_link_returned_as_is(self):
+        from downloader import resolve_short_link
+        # 非短链域名不产生请求，原样返回
+        assert resolve_short_link("https://www.bilibili.com/video/BV1xx") == \
+            "https://www.bilibili.com/video/BV1xx"
+
+    def test_non_short_link_youtube(self):
+        from downloader import resolve_short_link
+        assert resolve_short_link("https://www.youtube.com/watch?v=abc") == \
+            "https://www.youtube.com/watch?v=abc"
+
+    def test_short_link_resolved(self, monkeypatch):
+        from downloader import resolve_short_link
+
+        # 模拟 http_client.get 返回一个跟随重定向后的响应
+        class FakeResp:
+            url = "https://www.bilibili.com/video/BV1WmgC6xEic"
+            status_code = 200
+            headers = {}
+
+        monkeypatch.setattr("http_client.get", lambda url, **kw: FakeResp())
+        result = resolve_short_link("https://b23.tv/wR0HJVE")
+        assert result == "https://www.bilibili.com/video/BV1WmgC6xEic"
+
+    def test_short_link_302_manual_redirect(self, monkeypatch):
+        from downloader import resolve_short_link
+
+        # 模拟系统 curl 降级模式：返回 302 + Location
+        class FakeResp:
+            url = "https://b23.tv/wR0HJVE"
+            status_code = 302
+            headers = {"location": "https://www.bilibili.com/video/BV1xx"}
+
+        monkeypatch.setattr("http_client.get", lambda url, **kw: FakeResp())
+        result = resolve_short_link("https://b23.tv/wR0HJVE")
+        assert result == "https://www.bilibili.com/video/BV1xx"
+
+    def test_short_link_resolve_failure_returns_original(self, monkeypatch):
+        from downloader import resolve_short_link
+
+        # http_client.get 抛异常时回退原 URL
+        def boom(url, **kw):
+            raise ConnectionError("DNS failed")
+
+        monkeypatch.setattr("http_client.get", boom)
+        result = resolve_short_link("https://b23.tv/wR0HJVE")
+        assert result == "https://b23.tv/wR0HJVE"
+
+    def test_short_link_same_url_returns_original(self, monkeypatch):
+        from downloader import resolve_short_link
+
+        # 短链但最终 URL 没变（无重定向）
+        class FakeResp:
+            url = "https://b23.tv/wR0HJVE"
+            status_code = 200
+            headers = {}
+
+        monkeypatch.setattr("http_client.get", lambda url, **kw: FakeResp())
+        result = resolve_short_link("https://b23.tv/wR0HJVE")
+        assert result == "https://b23.tv/wR0HJVE"
