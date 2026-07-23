@@ -29,7 +29,8 @@ def get_site_name(url):
     未知域名取最后两段；无点/IP 用完整 host。"""
     domain = urlparse(url).netloc.lower()
 
-    if "xiaohongshu.com" in domain or "xhslink.com" in domain:
+    # 小红书短链有 .com / .cn 两种 TLD，按根域名 xhslink 归一
+    if "xiaohongshu.com" in domain or "xhslink.com" in domain or "xhslink.cn" in domain:
         return "xiaohongshu"
     elif "bilibili.com" in domain or "b23.tv" in domain:
         return "bilibili"

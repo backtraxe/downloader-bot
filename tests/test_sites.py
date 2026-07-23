@@ -11,6 +11,9 @@ class TestGetSiteName:
         ("https://www.xiaohongshu.com/explore/abc", "xiaohongshu"),
         ("https://www.xiaohongshu.com/discovery/item/abc", "xiaohongshu"),
         ("https://xhslink.com/abc", "xiaohongshu"),
+        ("https://xhslink.cn/abc", "xiaohongshu"),
+        # 小红书 App 分享文本常见形式（短链 .cn）
+        ("http://xhslink.cn/o/3V9olrzZIZU", "xiaohongshu"),
         # bilibili
         ("https://www.bilibili.com/video/BV1xx", "bilibili"),
         ("https://b23.tv/abc", "bilibili"),
