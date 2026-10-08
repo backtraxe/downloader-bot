@@ -185,6 +185,45 @@ class TestExtractImageUrl:
         assert extract_image_url({}) is None
 
 
+# ---------------- extract_live_photo_stream ----------------
+
+class TestExtractLivePhotoStream:
+    """实况照片每张 image 的 stream.EF4 里有 h264 视频流。"""
+
+    def test_ef4_stream(self):
+        from xhs_downloader import extract_live_photo_stream
+        img = {
+            "livePhoto": True,
+            "stream": {"EF5": [], "EF4": [{"masterUrl": "http://cdn/a.mp4", "qualityType": "HD"}], "EF6": [], "EF7": []},
+        }
+        assert extract_live_photo_stream(img) == "http://cdn/a.mp4"
+
+    def test_not_live_photo_returns_none(self):
+        from xhs_downloader import extract_live_photo_stream
+        assert extract_live_photo_stream({"livePhoto": False, "stream": {}}) is None
+        assert extract_live_photo_stream({}) is None
+
+    def test_multi_quality_picks_best(self):
+        from xhs_downloader import extract_live_photo_stream
+        img = {
+            "livePhoto": True,
+            "stream": {"EF4": [
+                {"masterUrl": "http://cdn/ld.mp4", "qualityType": "LD"},
+                {"masterUrl": "http://cdn/hd.mp4", "qualityType": "HD"},
+            ]},
+        }
+        assert extract_live_photo_stream(img) == "http://cdn/hd.mp4"
+
+    def test_ef_key_fallback_order(self):
+        # EF4 为空时尝试其他 EF 键
+        from xhs_downloader import extract_live_photo_stream
+        img = {
+            "livePhoto": True,
+            "stream": {"EF4": [], "EF5": [{"masterUrl": "http://cdn/e5.mp4"}]},
+        }
+        assert extract_live_photo_stream(img) == "http://cdn/e5.mp4"
+
+
 # ---------------- extract_video_url ----------------
 
 class TestExtractVideoUrl:

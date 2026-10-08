@@ -208,6 +208,31 @@ def extract_video_url(video):
     return None, "无 stream/h264 也无顶层 url"
 
 
+def extract_live_photo_stream(img):
+    """从实况照片 image 对象提取 h264 视频流 URL（无则返回 None）。
+
+    实况照片的每张 image 上挂 stream 字典，键是 EF4/EF5/EF6/EF7 等档位，
+    值是流列表（同 note.video 的 h264 结构）。按 EF4→EF7 顺序找首个非空档位，
+    档内按画质排序取最高（与 extract_video_url 同一 _STREAM_QUALITY_RANK）。
+    """
+    if not (img or {}).get("livePhoto"):
+        return None
+    stream = img.get("stream") or {}
+    for key in ("EF4", "EF5", "EF6", "EF7"):
+        candidates = [s for s in (stream.get(key) or []) if isinstance(s, dict) and s.get("masterUrl")]
+        if not candidates:
+            continue
+        best = max(
+            candidates,
+            key=lambda s: (
+                _STREAM_QUALITY_RANK.get(str(s.get("qualityType") or "").upper(), 0),
+                s.get("videoBitrate") or 0,
+            ),
+        )
+        return best.get("masterUrl")
+    return None
+
+
 def detect_risk_control(html, response):
     """检测小红书风控/验证码。综合文案 + 重定向 + 关键状态判定。"""
     if not html:
@@ -359,6 +384,12 @@ def download_xhs_media(url, cookie):
                     # 目录名已带标题与 noteId，文件本体只要 001.jpg 序号即可
                     filepath = os.path.join(base_path, f"{i + 1:03d}.jpg")
                     download_tasks.append((img_url, filepath))
+                # 实况照片：每张图另有 h264 视频流（EF4 档位），与静态图同序号配对
+                live_stream = extract_live_photo_stream(img)
+                if live_stream:
+                    live_url = ensure_https(live_stream)
+                    filepath = os.path.join(base_path, f"{i + 1:03d}.mp4")
+                    download_tasks.append((live_url, filepath))
 
         # 2. 提取视频链接并加入任务池（显式判定，失败有原因）
         video = note.get("video")
