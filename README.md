@@ -8,6 +8,8 @@
 pip install -r requirements.txt
 ```
 
+**Termux**：先 `bash setup_termux.sh`（脚本内含 `pkg install python-pillow`——Pillow 无 Android 预编译 wheel，不能用 pip 装）。Pillow / pillow-heif 均为可选依赖，没有也能下载（装饰过滤自动回退体积阈值、不能转 HEIC）。
+
 ## 使用
 
 ### `downloader.py` — 统一入口（推荐）

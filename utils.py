@@ -9,7 +9,12 @@ import os
 import re
 from urllib.parse import urljoin, urlparse
 
-from PIL import Image
+# Pillow 为可选依赖：Termux 上可能没有 wheel（需 pkg install python-pillow 或自行编译），
+# 缺 Pillow 时 get_image_dimensions 返回 None，调用方自动回退体积阈值判定。
+try:
+    from PIL import Image as _PILImage
+except ImportError:
+    _PILImage = None
 
 # 文件名中需要剔除的非法字符（跨平台：路径分隔符 + Windows 保留字符）
 _ILLEGAL_FILENAME_CHARS = re.compile(r'[\\/*?:"<>|\r\n]')
@@ -158,15 +163,16 @@ def guess_extension(url: str, content_type: str = "", default: str = ".jpg") -> 
 
 
 def get_image_dimensions(data: bytes):
-    """从图片二进制数据解析 (width, height)，基于 Pillow。
+    """从图片二进制数据解析 (width, height)，基于 Pillow（可选依赖）。
 
-    解析不出（数据过短、格式不识别、头损坏）返回 None，
+    解析不出（数据过短、格式不识别、头损坏、Pillow 未安装）返回 None，
     由调用方决定回退策略（如按文件体积）。
     """
-    if not data:
+    if not data or _PILImage is None:
         return None
     try:
-        with Image.open(io.BytesIO(data)) as img:
+        io_target = io.BytesIO(data)
+        with _PILImage.open(io_target) as img:
             return img.size
     except Exception:  # noqa: BLE001 格式不识别/损坏统一返回 None
         return None

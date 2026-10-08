@@ -92,6 +92,12 @@ pkg install -y \
 
 info "基础工具已安装"
 
+# Pillow：PyPI 无 Android 预编译 wheel，必须用 Termux 官方预编译包
+info "安装 python-pillow（Termux 预编译版，勿用 pip）"
+pkg install -y python-pillow
+
+info "基础工具已安装"
+
 # 升级 pip
 info "升级 pip 和打包工具"
 pip install --upgrade pip setuptools wheel

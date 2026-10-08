@@ -1,7 +1,10 @@
 requests>=2.32
 fake_useragent>=2.2
 beautifulsoup4>=4.12
-curl_cffi>=0.15
+curl_cffi>=0.15  # Termux 装不上不影响：http_client 有系统 curl 降级
 yt-dlp>=2026.6.9
-Pillow>=10.0
-pillow-heif>=1.0  # live_photo.py 处理 HEIC 实况帧转 JPEG 用
+
+# 以下为可选依赖，装不上不影响核心下载功能：
+# Pillow>=10.0        # Termux 请用 pkg install python-pillow（PyPI 无 Android wheel）
+# pillow-heif>=1.0    # 仅 live_photo.py 转 HEIC 用；Termux 先 pkg install libheif 再 pip 安装
+

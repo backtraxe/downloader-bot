@@ -25,7 +25,7 @@ import struct
 import subprocess
 import uuid
 
-from PIL import Image
+from PIL import Image  # noqa: E402 核心功能依赖 Pillow，Termux 需 pkg install python-pillow
 
 from utils import setup_logging
 
@@ -120,7 +120,8 @@ def transcode_to_jpeg(image_bytes, ext):
             import pillow_heif
         except ImportError:
             raise RuntimeError(
-                "处理 HEIC 需安装 pillow-heif：pip install pillow-heif"
+                "处理 HEIC 需安装 pillow-heif：pip install pillow-heif\n"
+                "  （Termux 需先 pkg install libheif，再 pip install pillow-heif 源码编译）"
             )
         pillow_heif.register_heif_opener()
     with Image.open(io.BytesIO(image_bytes)) as img:
