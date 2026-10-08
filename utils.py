@@ -3,10 +3,13 @@
 原子去重、扩展名推断、日志配置。
 
 集中在此以避免两个脚本各写一份且实现不一致。"""
+import io
 import logging
 import os
 import re
 from urllib.parse import urljoin, urlparse
+
+from PIL import Image
 
 # 文件名中需要剔除的非法字符（跨平台：路径分隔符 + Windows 保留字符）
 _ILLEGAL_FILENAME_CHARS = re.compile(r'[\\/*?:"<>|\r\n]')
@@ -150,6 +153,35 @@ def guess_extension(url: str, content_type: str = "", default: str = ".jpg") -> 
         if ext:
             return ext
     return default
+
+
+def get_image_dimensions(data: bytes):
+    """从图片二进制数据解析 (width, height)，基于 Pillow。
+
+    解析不出（数据过短、格式不识别、头损坏）返回 None，
+    由调用方决定回退策略（如按文件体积）。
+    """
+    if not data:
+        return None
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            return img.size
+    except Exception:  # noqa: BLE001 格式不识别/损坏统一返回 None
+        return None
+
+
+def extract_url_numeric_id(url):
+    """从 URL 路径末段提取纯数字 ID（如酷安 /feed/74208176）。
+
+    通用抓取页不依赖站点专属解析：末段为 >=5 位纯数字才采信，
+    位数太短（多为页码/日期片段）或含其他字符一律返回 None，
+    调用方据此决定是否在目录名中追加 _<id> 后缀。
+    """
+    path = urlparse(url).path.rstrip("/")
+    last = path.rsplit("/", 1)[-1]
+    if last.isdigit() and len(last) >= 5:
+        return last
+    return None
 
 
 def is_html_content(content_type: str) -> bool:

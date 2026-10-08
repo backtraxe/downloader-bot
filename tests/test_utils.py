@@ -8,12 +8,50 @@ import pytest
 from utils import (
     build_download_dir,
     cookie_header_to_netscape,
+    extract_url_numeric_id,
+    get_image_dimensions,
     guess_extension,
     init_useragent,
     normalize_url,
     sanitize_filename,
     unique_path,
 )
+
+
+# ---------------- get_image_dimensions ----------------
+
+def _make_image(w, h, fmt):
+    """用 Pillow 生成指定宽高的真实图片字节。"""
+    import io as _io
+    from PIL import Image
+    buf = _io.BytesIO()
+    Image.new("RGB", (w, h), (120, 80, 40)).save(buf, format=fmt)
+    return buf.getvalue()
+
+
+def _make_png(w, h):
+    return _make_image(w, h, "PNG")
+
+
+class TestGetImageDimensions:
+    def test_png(self):
+        assert get_image_dimensions(_make_png(1080, 1440)) == (1080, 1440)
+
+    def test_jpeg(self):
+        assert get_image_dimensions(_make_image(640, 480, "JPEG")) == (640, 480)
+
+    def test_gif(self):
+        assert get_image_dimensions(_make_image(32, 16, "GIF")) == (32, 16)
+
+    def test_webp(self):
+        assert get_image_dimensions(_make_image(200, 100, "WEBP")) == (200, 100)
+
+    def test_too_short(self):
+        assert get_image_dimensions(b"\x89PNG") is None
+        assert get_image_dimensions(b"") is None
+
+    def test_not_image(self):
+        assert get_image_dimensions(b"<html><body>x</body></html>") is None
 
 
 # ---------------- normalize_url ----------------
@@ -202,6 +240,29 @@ class TestInitUseragent:
         # 连续取若干次，至少应有一次不是 fallback（排除极小概率恰好抽到 fallback）
         samples = [ua.random for _ in range(20)]
         assert any(s != fallback for s in samples), "随机 UA 全是 fallback，OS 传参可能错了"
+
+
+# ---------------- extract_url_numeric_id ----------------
+
+class TestExtractUrlNumericId:
+    @pytest.mark.parametrize("url,want", [
+        ("https://www.coolapk.com/feed/74208176", "74208176"),
+        ("https://www.coolapk.com/feed/74208176?s=Y2MwN2E", "74208176"),  # query 不影响
+        ("https://weibo.com/2442426521/QB3tPc8lZ", None),  # 数字在中间段而非末段
+        ("https://example.com/post/12345/", "12345"),  # 末尾斜杠
+    ])
+    def test_extract(self, url, want):
+        assert extract_url_numeric_id(url) == want
+
+    @pytest.mark.parametrize("url", [
+        "https://example.com/",                    # 无路径
+        "https://example.com/about",               # 末段非纯数字
+        "https://example.com/2024/01/01",          # 末段太短（<5 位，多为日期）
+        "https://example.com/post/999",            # 3 位数字，不够置信
+        "https://example.com/a.jpg",               # 末段是文件
+    ])
+    def test_no_id(self, url):
+        assert extract_url_numeric_id(url) is None
 
 
 # ---------------- build_download_dir ----------------

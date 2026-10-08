@@ -3,3 +3,4 @@ fake_useragent>=2.2
 beautifulsoup4>=4.12
 curl_cffi>=0.15
 yt-dlp>=2026.6.9
+Pillow>=10.0
