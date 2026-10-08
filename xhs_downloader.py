@@ -1,5 +1,6 @@
 import requests
 from requests.adapters import HTTPAdapter
+import glob
 import re
 import json
 import os
@@ -101,6 +102,11 @@ def download_file(session, url, filepath, headers, max_retries=5):
     """单文件下载逻辑，供多线程调用。文件名冲突时原子去重，绝不覆盖。
     对 DNS 解析失败、连接超时等瞬时网络错误自动重试，提高下载成功率。
     流式写入失败时清理残留文件，避免重试留下损坏文件。"""
+    # 重下幂等：目标序号文件已存在（含扩展名变体）直接跳过，
+    # 避免重复下载同一笔记产生 001_1 副本
+    stem, _ = os.path.splitext(filepath)
+    if glob.glob(stem + ".*"):
+        return f"  [跳过] {os.path.basename(filepath)} 已存在，无需重复下载"
     url = ensure_https(url)
     last_err = None
     for attempt in range(1, max_retries + 1):
@@ -294,15 +300,17 @@ def download_xhs_media(url, cookie):
         note = note_data[note_id].get("note", {})
 
         title = note.get("title", "")
-        # title 可能为 None（undefined->null）、空串、纯特殊字符（如 "/"）
-        # sanitize_filename 会把纯特殊字符清洗为空并返回 "untitled"，
-        # 这些情况统一回退到 xhs_<noteId>，避免多篇无标题笔记都落到 untitled 目录
-        safe_title = sanitize_filename(title, default="") or f"xhs_{note_id}"
+        # title 可能为 None（undefined->null）、空串、纯特殊字符（如 "/"），
+        # sanitize_filename 会把纯特殊字符清洗为空，这些情况以 xhs 为基名兜底
+        base_title = sanitize_filename(title, default="") or "xhs"
+        # 目录名统一带 noteId 后缀（与通用抓取的 <标题>_<数字ID> 同口径）：
+        # 同名笔记可区分，目录名可直接溯源到原帖
+        safe_title = f"{base_title}_{note_id}"
 
         # 作者：note.user 上的 nickname/nickName（接口曾变更大小写，双 key 兼容）
         author = extract_xhs_author(note)
 
-        # 有作者则多一层目录：download/xiaohongshu/<作者>/<标题>/；无则退化
+        # 有作者则多一层目录：download/xiaohongshu/<作者>/<标题>_<noteId>/；无则退化
         base_path = build_download_dir("xiaohongshu", safe_title, author=author)
         os.makedirs(base_path, exist_ok=True)
         logger.info("目标文件夹: %s", base_path)
@@ -321,7 +329,8 @@ def download_xhs_media(url, cookie):
                 )
                 if img_url:
                     img_url = ensure_https(img_url)
-                    filepath = os.path.join(base_path, f"{safe_title}_{i + 1}.jpg")
+                    # 目录名已带标题与 noteId，文件本体只要 001.jpg 序号即可
+                    filepath = os.path.join(base_path, f"{i + 1:03d}.jpg")
                     download_tasks.append((img_url, filepath))
 
         # 2. 提取视频链接并加入任务池（显式判定，失败有原因）
@@ -331,7 +340,7 @@ def download_xhs_media(url, cookie):
             if video_url:
                 logger.info("发现视频，加入下载队列...")
                 video_url = ensure_https(video_url)
-                filepath = os.path.join(base_path, f"{safe_title}_video.mp4")
+                filepath = os.path.join(base_path, "video.mp4")
                 download_tasks.append((video_url, filepath))
             else:
                 logger.warning("发现 video 字段但未能提取到直链：%s", reason)
