@@ -319,6 +319,49 @@ class TestExtractVideoUrl:
         assert reason is None
 
 
+# ---------------- resolve_xhs_basename ----------------
+
+class TestResolveXhsBasename:
+    """无标题笔记的目录基名：title → desc → tags → xhs。"""
+
+    def test_title_priority(self):
+        from xhs_downloader import resolve_xhs_basename
+        note = {"title": "正常标题", "desc": "有desc", "tagList": [{"name": "tag"}], "noteId": "id"}
+        assert resolve_xhs_basename(note) == "正常标题"
+
+    def test_desc_fallback(self):
+        from xhs_downloader import resolve_xhs_basename
+        note = {"title": "", "desc": "这是一段描述文字，很长很长，会被裁剪到 30 字符之内使用", "noteId": "id"}
+        out = resolve_xhs_basename(note)
+        assert "描述文字" in out
+
+    def test_tag_only(self):
+        from xhs_downloader import resolve_xhs_basename
+        note = {
+            "title": "",
+            "desc": "",
+            "tagList": [{"name": "海边日落"}, {"name": "周末去哪玩"}],
+            "noteId": "id",
+        }
+        out = resolve_xhs_basename(note)
+        assert "海边日落" in out and "周末去哪玩" in out
+        # 拼成的标题应是 "#tag1 #tag2" 格式
+        assert "#" in out
+
+    def test_all_empty_falls_to_xhs(self):
+        from xhs_downloader import resolve_xhs_basename
+        assert resolve_xhs_basename({"title": "", "desc": "", "tagList": [], "noteId": "id"}) == "xhs"
+        assert resolve_xhs_basename({"title": "  ", "desc": None, "noteId": "id"}) == "xhs"
+        assert resolve_xhs_basename({"title": "/", "desc": "", "noteId": "id"}) == "xhs"
+
+    def test_desc_topic_marker_stripped(self):
+        # desc 里嵌的 "#话题[话题]#" 标记要清洗
+        from xhs_downloader import resolve_xhs_basename
+        note = {"title": "", "desc": "周末出游 #海边[话题]# #日落[话题]#", "noteId": "id"}
+        out = resolve_xhs_basename(note)
+        assert "[话题]" not in out
+
+
 # ---------------- 标题兜底逻辑 ----------------
 
 class TestTitleFallback:

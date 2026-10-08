@@ -208,6 +208,38 @@ def extract_video_url(video):
     return None, "无 stream/h264 也无顶层 url"
 
 
+def resolve_xhs_basename(note):
+    """解析笔记作为目录基名的清洗文本：title → desc → tagList → "xhs"。
+
+    处理规则：
+    - title 非空直接用（emoji/特殊字符交 sanitize_filename 处理）
+    - desc 做裁剪（前 30 字符）并去除 "#tag[话题]#" 标记
+    - 前两者全空时把 tagList 拼成 "#tag1 #tag2"
+    - 各层 sanitize 后仍是空串则继续往下回退，最终兜底 "xhs"
+    """
+    title = (note or {}).get("title") or ""
+    if title.strip():
+        cleaned = sanitize_filename(title, default="")
+        if cleaned:
+            return cleaned
+
+    desc = (note.get("desc") or "").strip()
+    if desc:
+        # 清洗 desc 中 "#tag[话题]#" 标记为标准 "#tag"
+        cleaned = sanitize_filename(
+            re.sub(r"#([^\s#\[\]]+)\[话题\]#", r"#\1", desc)[:30], default="")
+        if cleaned:
+            return cleaned
+
+    tags = [t.get("name") for t in (note.get("tagList") or []) if t.get("name")]
+    if tags:
+        cleaned = sanitize_filename(" ".join(f"#{t}" for t in tags), default="")
+        if cleaned:
+            return cleaned
+
+    return "xhs"
+
+
 def extract_live_photo_stream(img):
     """从实况照片 image 对象提取 h264 视频流 URL（无则返回 None）。
 
@@ -354,10 +386,8 @@ def download_xhs_media(url, cookie):
         note_id = list(note_data.keys())[0]
         note = note_data[note_id].get("note", {})
 
-        title = note.get("title", "")
-        # title 可能为 None（undefined->null）、空串、纯特殊字符（如 "/"），
-        # sanitize_filename 会把纯特殊字符清洗为空，这些情况以 xhs 为基名兜底
-        base_title = sanitize_filename(title, default="") or "xhs"
+        # 目录基名经 resolve_xhs_basename：title → desc → tagList → "xhs" 层层兜底
+        base_title = resolve_xhs_basename(note)
         # 目录名统一带 noteId 后缀（与通用抓取的 <标题>_<数字ID> 同口径）：
         # 同名笔记可区分，目录名可直接溯源到原帖
         safe_title = f"{base_title}_{note_id}"
