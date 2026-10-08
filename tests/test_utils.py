@@ -129,6 +129,19 @@ class TestGuessExtension:
         assert guess_extension("https://x.com/abc") == ".jpg"
         assert guess_extension("https://x.com/abc", default=".mp4") == ".mp4"
 
+    def test_heic_content_type(self):
+        # 小红书部分原图是 HEIF：无扩展名 URL + image/heic 应得 .heic
+        assert guess_extension("https://ci.xiaohongshu.com/1040g008", content_type="image/heic") == ".heic"
+        assert guess_extension("https://ci.xiaohongshu.com/1040g008", content_type="image/heif") == ".heic"
+
+    def test_heic_from_url(self):
+        assert guess_extension("https://x.com/a.heic") == ".heic"
+
+    def test_heif_pillow_unsupported_returns_none(self):
+        # 纯 HEIF 字节 Pillow 默认解不出，解析失败应回退 None（改由体积兜底）
+        heif = b"\x00\x00\x00\x20ftypheic" + b"\x00" * 64
+        assert get_image_dimensions(heif) is None
+
 
 # ---------------- unique_path ----------------
 

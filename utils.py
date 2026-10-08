@@ -15,7 +15,7 @@ from PIL import Image
 _ILLEGAL_FILENAME_CHARS = re.compile(r'[\\/*?:"<>|\r\n]')
 
 # 常见媒体扩展名白名单，用于从 URL 推断类型
-_EXT_BY_URL = re.compile(r'\.(jpe?g|png|gif|webp|mp4|mov|webm|avi|mkv)(?:\?|#|$)', re.IGNORECASE)
+_EXT_BY_URL = re.compile(r'\.(jpe?g|png|gif|webp|hei[cf]|mp4|mov|webm|avi|mkv)(?:\?|#|$)', re.IGNORECASE)
 
 # Content-Type -> 扩展名映射
 _EXT_BY_CONTENT_TYPE = {
@@ -26,6 +26,8 @@ _EXT_BY_CONTENT_TYPE = {
     "image/webp": ".webp",
     "image/svg+xml": ".svg",
     "image/avif": ".avif",
+    "image/heic": ".heic",
+    "image/heif": ".heic",
     "video/mp4": ".mp4",
     "video/quicktime": ".mov",
     "video/webm": ".webm",
