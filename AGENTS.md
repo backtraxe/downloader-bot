@@ -30,11 +30,11 @@ download/            # 输出目录，download/<站点>[/<作者>]/<标题>[_<ID
 python -m venv .venv && source .venv/bin/activate   # 可选但推荐
 pip install -r requirements.txt
 pip install pytest
-python -m pytest -q                                  # 223 个单元测试，全部离线
+python -m pytest -q                                  # 237 个单元测试，全部离线
 python downloader.py                                 # 统一入口，按 URL 自动路由
 ```
 
-注意：裸 `pytest -q` 在没有 conftest.py 的情况下不会把项目根加入 `sys.path`，会因 `ModuleNotFoundError` 收集失败；统一用 `python -m pytest -q`（或补充 conftest.py）。当前 223 个测试全部通过（已验证）。
+注意：裸 `pytest -q` 在没有 conftest.py 的情况下不会把项目根加入 `sys.path`，会因 `ModuleNotFoundError` 收集失败；统一用 `python -m pytest -q`（或补充 conftest.py）。当前 237 个测试全部通过（已验证）。
 
 ## 下载器架构
 
@@ -50,7 +50,7 @@ python downloader.py                                 # 统一入口，按 URL �
 
 **`sites.py`（共用）。** `get_site_name(url)` 把域名归一为小写站点名：twitter 含 `x.com`/`t.co`，xiaohongshu 含 `xiaohongshu.com`/`xhslink.com`/`xhslink.cn`；未知域名取最后两段（`www.example.com` → `example.com`），无点/IP 用完整 host。`SITE_REQUIRE_COOKIE` 记录各站点 cookie 建议级别。`load_cookie_for_url` 按 `cookies/<site>.txt` 加载：文件不存在时自动创建空文件并提示，内容为空返回 None。**新增站点识别只改这一处**，保证 downloader.py 与 xhs_downloader.py 口径一致。
 
-**`xhs_downloader.py`（小红书）。** 手写正则提取 `window.__INITIAL_STATE__={...}`（比 yt-dlp 对小红书更可控），经 `normalize_xhs_state_json` 只把 JSON 值语境的 `undefined` 替换为 `null`，再遍历 `note.noteDetailMap.<id>.note` 取 `imageList[*].urlDefault` 与 `video.media.stream.h264[0].masterUrl`。用 stdlib `requests`（区别于 1024 的 curl_cffi），Session 配 urllib3 Retry（total=5, backoff）。作者经 `extract_xhs_author` 取 `note.user.nickname`/`nickName` 双 key 兼容。检测风控（"验证码"/"访问过于频繁"/重定向到 verify/login/captcha，由 `detect_risk_control`）与笔记不存在（`/404` 路径、`errorCode=-510001`、"你访问的页面不见了" title，由 `detect_note_not_found`），避免 404 页被误报为"页面结构变更"。媒体 URL 统一经 `ensure_https` 升级。输出 `download/xiaohongshu/[<作者>/]<标题>_<noteId>/`，无标题笔记兜底 `xhs_<noteId>`；目录内图片按 `001.jpg` 序号命名、视频固定 `video.mp4`。
+**`xhs_downloader.py`（小红书）。** 手写正则提取 `window.__INITIAL_STATE__={...}`（比 yt-dlp 对小红书更可控），经 `normalize_xhs_state_json` 只把 JSON 值语境的 `undefined` 替换为 `null`，再遍历 `note.noteDetailMap.<id>.note`：图片经 `extract_image_url` 优先用 `imageList[].fileId` 拼 `ci.xiaohongshu.com/<fileId>` 原图直链（未转码、尺寸与 note 声明宽高一致），fileId 缺失才回退 `urlDefault` 展示版压缩 webp；视频经 `extract_video_url` 从 `video.media.stream.h264` 按 `qualityType`(HD>SD>LD)/`videoBitrate` 选最高画质流而非首项。用 stdlib `requests`（区别于 1024 的 curl_cffi），Session 配 urllib3 Retry（total=5, backoff）。作者经 `extract_xhs_author` 取 `note.user.nickname`/`nickName` 双 key 兼容。检测风控（"验证码"/"访问过于频繁"/重定向到 verify/login/captcha，由 `detect_risk_control`）与笔记不存在（`/404` 路径、`errorCode=-510001`、"你访问的页面不见了" title，由 `detect_note_not_found`），避免 404 页被误报为"页面结构变更"。媒体 URL 统一经 `ensure_https` 升级。输出 `download/xiaohongshu/[<作者>/]<标题>_<noteId>/`，无标题笔记兜底 `xhs_<noteId>`；目录内图片按 `001.jpg` 序号命名、视频固定 `video.mp4`。
 
 **`1024_downloader.py`（通用静态抓取）。** 用 `curl_cffi` 的 `impersonate="chrome110"` 做 TLS 指纹伪装绕过防盗链/CDN。页面请求经 `fetch_page` 封装：`429` 限流、所有 `5xx`（含腾讯云 EdgeOne WAF 的非标拦截码 `567`，酷安等站点会间歇返回"请求已被站点的安全策略拦截"页）及网络异常按指数退避重试至多 3 次（`_is_block_status` 判定），`4xx` 确定性错误立即放弃。深扫 `<img>/<source>/<video>` 的懒加载属性（`data-src`、`data-original`、`ess-data` 等）、`<a href>` 直链、行内 `style` 的 `url()` 背景图。装饰资源过滤：扫描阶段（`collect_media_urls._add`）按原始 URL 文件名命中 `_DECORATIVE_KEYWORDS`（logo/avatar/qrcode/emotion/beian/icon 等）剔除——必须在此时做，落盘会被序号重命名为 `001.<ext>`，下载阶段已拿不到原始关键词；下载后按宽高过滤——`utils.get_image_dimensions` 用 Pillow 解析图片宽高（解析失败返回 None），短边 < `MIN_IMAGE_DIMENSION`（300px）判为装饰图删除，尺寸解析失败回退体积阈值 `MIN_IMAGE_BYTES`（20KB）；视频不过滤（短视频也可能很小）。下载时 `Referer` 设为页面 URL（破解防盗链的关键），拦截到 HTML 响应（被风控）直接判失败，扩展名按 URL + Content-Type 校正（`guess_extension`）。`ThreadPoolExecutor(max_workers=5)` 并发，请求间 0.5–1.5s 随机延迟防封 IP。媒体扫描由 `collect_media_urls` 按 DOM 顺序保序去重；落盘按 `build_media_tasks` 序号命名 `001.<ext>`（目录名已带标题与 ID，文件本体只要序号；与小红书同风格，目录内按序号还原帖内次序），不再保留远端乱序哈希名。作者经 `extract_page_author` 两级提取：DOM 选择器（酷安 `.username-item`）优先，`<title>` 的"正文 来自 作者 - 站点"后缀模式兜底；命中时标题剥离作者尾巴（避免目录名重复），未命中返回空串自然退化为无作者层。输出 `download/<站点>[/<作者>/]<标题>[_<数字ID>]/`——URL 末段含 ≥5 位数字 ID 时经 `utils.extract_url_numeric_id` 追加后缀（`make_page_dir_name`），同标题可区分、目录可溯源。
 
@@ -71,7 +71,7 @@ python downloader.py                                 # 统一入口，按 URL �
 
 ## 测试
 
-pytest 是唯一框架，223 个测试全部离线（不联网）。测试位于 `tests/test_<模块>.py`，只覆盖纯函数：`get_site_name`、`resolve_uploader`、`build_ydl_opts`、`dispatch_url`、`diagnose_error`、`resolve_short_link`、`detect_risk_control`、`detect_note_not_found`、`extract_xhs_author`、`extract_video_url`、`ensure_https`、`_is_transient_error`、`_is_block_status`、`fetch_page`、`_is_decorative_name`、`download_file`（注入假 session）、`get_image_dimensions`（Pillow 生成真实图片）、`extract_url_numeric_id`、`make_page_dir_name`、`collect_media_urls`（构造 HTML 字符串）、`build_media_tasks`、sanitize/build_download_dir/unique_path/cookie_header_to_netscape 等。新增 URL 或解析分支时按 `tests/test_sites.py` 的方式用参数化用例；新的公共函数应附带测试。提交前跑 `python -m pytest -q`。
+pytest 是唯一框架，237 个测试全部离线（不联网）。测试位于 `tests/test_<模块>.py`，只覆盖纯函数：`get_site_name`、`resolve_uploader`、`build_ydl_opts`、`dispatch_url`、`diagnose_error`、`resolve_short_link`、`detect_risk_control`、`detect_note_not_found`、`extract_xhs_author`、`extract_image_url`、`extract_video_url`（含多画质流选择）、`ensure_https`、`_is_transient_error`、`_is_block_status`、`fetch_page`、`_is_decorative_name`、`download_file`（注入假 session）、`get_image_dimensions`（Pillow 生成真实图片）、`extract_url_numeric_id`、`make_page_dir_name`、`collect_media_urls`（构造 HTML 字符串）、`build_media_tasks`、sanitize/build_download_dir/unique_path/cookie_header_to_netscape 等。新增 URL 或解析分支时按 `tests/test_sites.py` 的方式用参数化用例；新的公共函数应附带测试。提交前跑 `python -m pytest -q`。
 
 ## Cookie 与安全
 

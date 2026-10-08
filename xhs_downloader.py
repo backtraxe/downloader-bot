@@ -160,14 +160,44 @@ def extract_xhs_author(note):
     return user.get("nickname") or user.get("nickName") or ""
 
 
+def extract_image_url(img):
+    """解析单张图片的最佳直链。
+
+    优先用 fileId 拼 ci.xiaohongshu.com 原图直链（尺寸与 note 声明宽高一致，
+    未转码）；fileId 缺失时回退展示版 urlDefault（!nd_dft 后缀的压缩 webp），
+    再回退 url / infoList[0].url。都拿不到返回 None。"""
+    file_id = (img or {}).get("fileId")
+    if file_id:
+        return f"https://ci.xiaohongshu.com/{file_id}"
+    url = (
+        (img or {}).get("urlDefault")
+        or (img or {}).get("url")
+        or (((img or {}).get("infoList") or [{}])[0] or {}).get("url")
+    )
+    return url or None
+
+
+# h264 流画质档位映射：qualityType 越大越好
+_STREAM_QUALITY_RANK = {"LD": 1, "SD": 2, "HD": 3}
+
+
 def extract_video_url(video):
     """显式、逐层解析视频直链，避免静默吞错。
-    返回 (url, reason)——url 为 None 时 reason 说明原因。"""
+    返回 (url, reason)——url 为 None 时 reason 说明原因。
+
+    h264 列表含多档画质时（qualityType HD/SD/LD、videoBitrate），
+    选画质最高的一档而非首项，确保拿到原画。"""
     media = (video or {}).get("media") or {}
     stream = (media.get("stream") or {})
     h264_list = stream.get("h264") or []
     if h264_list and isinstance(h264_list, list):
-        master = (h264_list[0] or {}).get("masterUrl")
+        def _quality(s):
+            s = s or {}
+            return (
+                _STREAM_QUALITY_RANK.get(str(s.get("qualityType") or "").upper(), 0),
+                s.get("videoBitrate") or 0,
+            )
+        master = max((s or {} for s in h264_list), key=_quality).get("masterUrl")
         if master:
             return master, None
         return None, "h264 流存在但缺少 masterUrl"
@@ -322,11 +352,8 @@ def download_xhs_media(url, cookie):
         if image_list:
             logger.info("发现 %d 张图片，开启多线程下载...", len(image_list))
             for i, img in enumerate(image_list):
-                img_url = (
-                    img.get("urlDefault")
-                    or img.get("url")
-                    or ((img.get("infoList") or [{}])[0] or {}).get("url")
-                )
+                # 优先原图（fileId 拼 ci 直链），缺失时回退展示版转码 webp
+                img_url = extract_image_url(img)
                 if img_url:
                     img_url = ensure_https(img_url)
                     # 目录名已带标题与 noteId，文件本体只要 001.jpg 序号即可

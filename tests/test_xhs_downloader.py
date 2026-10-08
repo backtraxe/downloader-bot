@@ -157,6 +157,34 @@ class TestIsTransientError:
         assert _is_transient_error(err) is False
 
 
+# ---------------- extract_image_url ----------------
+
+class TestExtractImageUrl:
+    """图片直链解析：优先 ci.xiaohongshu.com/<fileId> 原图，回退展示版。"""
+
+    def test_prefers_original_via_file_id(self):
+        from xhs_downloader import extract_image_url
+        img = {
+            "fileId": "notes_pre_post/1040g3k0326247hhll66g5polqvp7ebfe4qhtshg",
+            "urlDefault": "http://sns-webpic-qc.xhscdn.com/x/notes_pre_post/1040g3k0326247hhll66g5polqvp7ebfe4qhtshg!nd_dft_wlteh_webp_3",
+        }
+        assert extract_image_url(img) == (
+            "https://ci.xiaohongshu.com/notes_pre_post/1040g3k0326247hhll66g5polqvp7ebfe4qhtshg"
+        )
+
+    def test_falls_back_to_url_default_without_file_id(self):
+        from xhs_downloader import extract_image_url
+        img = {"urlDefault": "http://cdn/x.jpg!nd_dft_wlteh_webp_3"}
+        assert extract_image_url(img) == "http://cdn/x.jpg!nd_dft_wlteh_webp_3"
+
+    def test_falls_back_chain(self):
+        # urlDefault 缺失时沿用既有回退链：url -> infoList[0].url
+        from xhs_downloader import extract_image_url
+        assert extract_image_url({"url": "http://cdn/a.jpg"}) == "http://cdn/a.jpg"
+        assert extract_image_url({"infoList": [{"url": "http://cdn/b.jpg"}]}) == "http://cdn/b.jpg"
+        assert extract_image_url({}) is None
+
+
 # ---------------- extract_video_url ----------------
 
 class TestExtractVideoUrl:
@@ -168,6 +196,38 @@ class TestExtractVideoUrl:
         url, reason = extract_video_url(video)
         assert url == "https://cdn.example.com/v.mp4"
         assert reason is None
+
+    def test_prefers_highest_quality_stream(self):
+        # h264 列表通常含多档画质（qualityType），应选最高档而非第一项
+        from xhs_downloader import extract_video_url
+        video = {"media": {"stream": {"h264": [
+            {"qualityType": "LD", "masterUrl": "https://cdn.example.com/ld.mp4"},
+            {"qualityType": "HD", "masterUrl": "https://cdn.example.com/hd.mp4"},
+            {"qualityType": "SD", "masterUrl": "https://cdn.example.com/sd.mp4"},
+        ]}}}
+        url, reason = extract_video_url(video)
+        assert url == "https://cdn.example.com/hd.mp4"
+        assert reason is None
+
+    def test_quality_tiebreak_by_bitrate(self):
+        # qualityType 相同或缺失时按 videoBitrate 选更高码率
+        from xhs_downloader import extract_video_url
+        video = {"media": {"stream": {"h264": [
+            {"masterUrl": "https://cdn.example.com/low.mp4", "videoBitrate": 800000},
+            {"masterUrl": "https://cdn.example.com/high.mp4", "videoBitrate": 2500000},
+        ]}}}
+        url, reason = extract_video_url(video)
+        assert url == "https://cdn.example.com/high.mp4"
+
+    def test_no_signals_falls_back_to_first(self):
+        # 无任何画质信号时保持原行为：取第一项
+        from xhs_downloader import extract_video_url
+        video = {"media": {"stream": {"h264": [
+            {"masterUrl": "https://cdn.example.com/a.mp4"},
+            {"masterUrl": "https://cdn.example.com/b.mp4"},
+        ]}}}
+        url, reason = extract_video_url(video)
+        assert url == "https://cdn.example.com/a.mp4"
 
     def test_h264_list_missing_master_url(self):
         from xhs_downloader import extract_video_url
