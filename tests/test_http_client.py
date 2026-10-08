@@ -2,7 +2,12 @@
 """http_client.py 纯函数单元测试（无网络）。"""
 import pytest
 
-from http_client import CurlResponse, _build_curl_args, _CURL_IMPERSONATE_FLAGS
+from http_client import (
+    CurlResponse,
+    _build_curl_args,
+    _parse_response_blocks,
+    _CURL_IMPERSONATE_FLAGS,
+)
 
 
 # ---------------- CurlResponse ----------------
@@ -49,6 +54,32 @@ class TestCurlResponse:
         assert r.json() == {"key": "val"}
 
 
+# ---------------- _parse_response_blocks ----------------
+
+class TestParseResponseBlocks:
+    def test_single_block(self):
+        raw = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\nhello"
+        status, headers, body = _parse_response_blocks(raw)
+        assert status == 200
+        assert headers["content-type"] == "text/html"
+        assert body == b"hello"
+
+    def test_redirect_chain_keeps_last_block(self):
+        # -L 跟随后输出多块响应头：301 块 + 200 块，应取最后一块的状态与头
+        raw = (
+            b"HTTP/1.1 301 Moved\r\nLocation: http://x/b\r\nContent-Length: 0\r\n\r\n"
+            b"HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\n\r\nJPEGDATA"
+        )
+        status, headers, body = _parse_response_blocks(raw)
+        assert status == 200
+        assert headers.get("content-type") == "image/jpeg"
+        assert body == b"JPEGDATA"
+
+    def test_no_separator(self):
+        status, headers, body = _parse_response_blocks(b"garbage")
+        assert body == b"garbage"
+
+
 # ---------------- _build_curl_args ----------------
 
 class TestBuildCurlArgs:
@@ -80,3 +111,8 @@ class TestBuildCurlArgs:
         args = _build_curl_args("http://x", "GET", {}, 42, None, False)
         idx = args.index("--max-time")
         assert args[idx + 1] == "42"
+
+    def test_follows_redirects(self):
+        # 系统 curl 默认不跟随 30x，必须显式 -L，否则短链/跳转场景直接拿到空 301 body
+        args = _build_curl_args("http://x", "GET", {}, 15, None, False)
+        assert "-L" in args

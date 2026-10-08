@@ -9,7 +9,6 @@ Termux 上 curl_cffi 的编译扩展常因 Python 版本不匹配而加载失败
 系统 curl 命令由 libcurl 处理 TLS，不依赖 Python ABI，在 Termux 上天然可用。
 """
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -62,9 +61,49 @@ class CurlResponse:
         return json.loads(self._body)
 
 
+def _parse_response_blocks(raw):
+    """解析 `curl -D -` 的输出，返回 (status_code, headers, body)。
+
+    开启 -L 跟随后，stdout 会串联多个响应头块（每次重定向一块），
+    这里循环剥掉中间块，取最后一个块的状态行与响应头。"""
+    while True:
+        for sep in (b"\r\n\r\n", b"\n\n"):
+            idx = raw.find(sep)
+            if idx != -1:
+                break
+        if idx == -1:
+            return 200, {}, raw
+
+        header_bytes, rest = raw[:idx], raw[idx + len(sep):]
+        header_text = header_bytes.decode("utf-8", errors="replace")
+        lines = header_text.splitlines()
+
+        status_code = 200
+        resp_headers = {}
+        for line in lines:
+            line = line.strip()
+            if line.startswith("HTTP/"):
+                parts = line.split(None, 2)
+                if len(parts) >= 2:
+                    try:
+                        status_code = int(parts[1])
+                    except ValueError:
+                        pass
+                continue
+            m = re.match(r"^([^:]+):\s*(.*)$", line)
+            if m:
+                resp_headers[m.group(1).strip().lower()] = m.group(2).strip()
+
+        # 3xx 块只有头和空 body，后面紧跟下一跳的响应头块
+        if 300 <= status_code < 400 and rest:
+            raw = rest
+            continue
+        return status_code, resp_headers, rest
+
+
 def _build_curl_args(url, method, headers, timeout, impersonate, stream, extra_flags=None):
     """组装 curl 命令行参数列表。"""
-    args = [_CURL_BIN, "-s", "-S", "--show-error", "-X", method]
+    args = [_CURL_BIN, "-s", "-S", "--show-error", "-L", "-X", method]
     args += [
         "-D", "-",          # 输出响应头到 stdout
         "--max-time", str(timeout),
@@ -93,38 +132,7 @@ def _curl_request(url, method="GET", headers=None, timeout=15, impersonate=None,
         raise Exception(f"curl 失败（返回码 {proc.returncode}）：{stderr}")
 
     raw = proc.stdout
-    # 分离响应头和 body：第一个 \r\n\r\n 或 \n\n 之后是 body
-    sep = b"\r\n\r\n"
-    idx = raw.find(sep)
-    if idx == -1:
-        sep = b"\n\n"
-        idx = raw.find(sep)
-    if idx == -1:
-        header_bytes = b""
-        body = raw
-    else:
-        header_bytes = raw[:idx]
-        body = raw[idx + len(sep):]
-
-    # 解析状态行和头部
-    header_text = header_bytes.decode("utf-8", errors="replace")
-    lines = header_text.splitlines()
-    status_code = 200
-    resp_headers = {}
-    for line in lines:
-        line = line.strip()
-        if line.startswith("HTTP/"):
-            parts = line.split(None, 2)
-            if len(parts) >= 2:
-                try:
-                    status_code = int(parts[1])
-                except ValueError:
-                    pass
-            continue
-        m = re.match(r"^([^:]+):\s*(.*)$", line)
-        if m:
-            resp_headers[m.group(1).strip().lower()] = m.group(2).strip()
-
+    status_code, resp_headers, body = _parse_response_blocks(raw)
     return CurlResponse(status_code, resp_headers, body, url)
 
 
