@@ -29,7 +29,9 @@ python downloader.py
 | 其他网站 | 任意 | 通用静态网页抓取 | 按域名命名 |
 
 - Cookie 从 `cookies/<站点名>.txt` 读取
-- 输出到 `download/<站点>[/<作者>]/<标题>.<ext>`
+- 输出结构统一为 `download/<站点>[/<作者>/]<标题>[_<ID>]/`：图文内容一个目录，目录名可溯源原帖；目录内图片按 `001.jpg`、`002.jpg` 序号命名（还原帖内次序），视频为 `video.mp4`；单视频内容（yt-dlp 后端）直接落 `<标题>.<ext>` 文件
+- 重复下载同一链接时，已存在的文件直接跳过，不产生 `_1` 副本
+- 通用抓取会自动过滤站点装饰图（logo/头像/二维码/表情等）：文件名含装饰关键词的直接跳过，尺寸过小（短边 <300px）的落盘后删除
 - 短链（`b23.tv` / `v.douyin.com` / `youtu.be` / `t.co` / `instagr.am` 等）会自动展开为最终直链后再下载，避免 DNS 解析失败
 
 三个下载脚本也可单独运行（`python xhs_downloader.py` / `python 1024_downloader.py`），行为与统一入口一致。
@@ -43,8 +45,10 @@ python downloader.py
 #### 通用网页后端
 
 - 使用 `curl_cffi` 的 `impersonate="chrome110"` 做 TLS 指纹伪装，绕过防盗链 / CDN 拦截
-- `curl_cffi` 不可用时自动降级为系统 `curl` 命令（由 `http_client.py` 统一封装），Termux 等环境同样可用
+- `curl_cffi` 不可用时自动降级为系统 `curl` 命令（由 `http_client.py` 统一封装，跟随 30x 重定向），Termux 等环境同样可用
+- 被站点 WAF 拦截（HTTP 429 / 5xx，如腾讯云 EdgeOne 的 567 拦截页）或网络异常时自动退避重试最多 3 次
 - 深度扫描 `<img>/<source>/<video>` 的懒加载属性（`data-src`、`data-original`、`ess-data` 等）、`<a href>` 直链、以及行内 `style` 中的 `background-image`
+- 能识别 `正文 来自 作者 - 站点` 标题模式的页面自动提取作者，目录带作者层
 - 下载时带 `Referer`（破解防盗链的关键），并发下载（`max_workers=5`）
 
 ## 目录约定
@@ -130,8 +134,10 @@ iOS 没有 DevTools，也**无法**用“快捷指令”读取 Safari 的 Cookie
 
 ```bash
 pip install pytest
-pytest -q
+python -m pytest -q
 ```
+
+裸 `pytest -q` 不会把项目根加入 `sys.path`，会因 `ModuleNotFoundError` 收集失败，统一用 `python -m pytest -q`。
 
 ## License
 
