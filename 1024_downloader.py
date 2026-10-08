@@ -42,9 +42,14 @@ MIN_IMAGE_BYTES = 20 * 1024
 
 
 def _is_decorative_name(filename):
-    """按文件名判断是否为站点装饰资源（logo/头像/二维码/表情等）。"""
+    """按文件名判断是否为站点装饰资源（logo/头像/二维码/表情等）。
+
+    用单词边界匹配而非子串命中，避免 "iconic" 被误里 "icon"、
+    "avatare" 被误里 "avatar"——这类单词只是以装饰关键词开头/结尾，
+    语义上不是装饰词。"""
     low = filename.lower()
-    return any(kw in low for kw in _DECORATIVE_KEYWORDS)
+    return any(re.search(rf"(?:^|[\W_]){re.escape(kw)}(?:[\W_]|$)", low)
+               for kw in _DECORATIVE_KEYWORDS)
 
 
 def get_headers():

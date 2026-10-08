@@ -12,7 +12,6 @@
 """
 import os
 import random
-import sys
 import time
 
 import yt_dlp

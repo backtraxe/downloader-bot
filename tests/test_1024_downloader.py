@@ -35,6 +35,8 @@ class TestIsDecorativeName:
     @pytest.mark.parametrize("name", [
         "38813669_98682f5d_6765_3739_311@2494x3325.jpg.m.jpg",
         "photo.jpg", "IMG_2024.png", "video.mp4",
+        # 装饰关键词作为更长单词的子串不得误杀（icon→iconic、avatar→avatare）
+        "iconic_photo.jpg", "icondesign_2024.jpg", "avatare.jpg",
     ])
     def test_content(self, name):
         assert mod._is_decorative_name(name) is False
