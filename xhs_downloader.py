@@ -233,7 +233,8 @@ def resolve_xhs_basename(note):
 
     tags = [t.get("name") for t in (note.get("tagList") or []) if t.get("name")]
     if tags:
-        cleaned = sanitize_filename(" ".join(f"#{t}" for t in tags), default="")
+        # tag 列表用 _ 分隔（更接近分隔符语义，且避免 shell 场景处理空格）
+        cleaned = sanitize_filename("_".join(f"#{t}" for t in tags), default="")
         if cleaned:
             return cleaned
 

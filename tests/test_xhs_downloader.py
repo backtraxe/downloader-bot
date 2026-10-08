@@ -345,8 +345,9 @@ class TestResolveXhsBasename:
         }
         out = resolve_xhs_basename(note)
         assert "海边日落" in out and "周末去哪玩" in out
-        # 拼成的标题应是 "#tag1 #tag2" 格式
-        assert "#" in out
+        # tag 列表用 _ 分隔
+        assert "_" in out
+        assert "#海边日落_#周末去哪玩" in out or "#海边日落_" in out
 
     def test_all_empty_falls_to_xhs(self):
         from xhs_downloader import resolve_xhs_basename
