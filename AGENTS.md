@@ -58,6 +58,8 @@ python downloader.py                                 # 统一入口，按 URL �
 
 **`utils.py`（共用工具）。** `setup_logging`（幂等）、`init_useragent`（fake_useragent 随机 UA，多采样探测不可用时降级固定 Chrome UA）、`extract_urls`（从粘贴的分享文案中提取 URL，剔除尾部中文/标点）、`sanitize_filename`、`build_download_dir`（作者非空才加层，防御目录穿越）、`unique_path`（`O_CREAT|O_EXCL` 原子占位去重，并发不撞名）、`guess_extension`、`normalize_url`、`is_html_content`、`normalize_xhs_state_json`、`cookie_header_to_netscape`（把 `Cookie:` 请求头字符串转成 yt-dlp 可读的 Netscape 文件）。
 
+**`live_photo.py`（实况后处理，独立模块）。** 把小红书实况对儿(`001.heic`+`001.mp4`)打包为平台可用格式：`--android`（默认）把 HEIC 转 JPEG（pillow-heif，可选依赖——无 HEIC 时不需安装）+ MP4 mux 成 Motion Photo 单文件（`<stem>_motion.jpg`，双写 Camera + MicroVideo 两种 XMP）；`--ios` 用 exiftool 写配对 ContentIdentifier 输出 `<stem>_ios.{heic,mov}`。华为的私有格式不支持。**注意**：mux 时 XMP 段必须紧跟 JPEG SOI 之后；被下载器完全解耦——不被 downloader/1024/xhs 任何模块 import，独立 CLI 使用。
+
 ## 代码风格约定
 
 - Python 3，源码 UTF-8，带 `# -*- coding: utf-8 -*-` 头（部分老文件无此头，不必特意补）。

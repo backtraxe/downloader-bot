@@ -41,6 +41,17 @@ python downloader.py
 - 手写解析 `window.__INITIAL_STATE__`，提取图片列表和视频流（比 yt-dlp 对小红书更可控）
 - 支持 `xhslink.com` 短链与 App 分享链接（含 `xsec_token`），脚本会跟随重定向到 `xiaohongshu.com` 后再解析
 - 需要在 `cookies/xiaohongshu.txt` 中填入浏览器 Cookie；文件不存在或为空时脚本会自动创建并提示
+- 实况照片（live photo）按"静态原图 + 实况视频"同序号配对下载（`001.heic` + `001.mp4`），静态图为 HEIF/JPEG 原图、视频按画质选最高档
+
+**实况照片后处理（`live_photo.py`，独立模块）**：把下载好的实况对儿转成手机相册可用的实况格式。
+
+```bash
+python live_photo.py "download/xiaohongshu/<作者>/<标题>_<noteId>"
+```
+
+- 默认生成 Android 侧 Motion Photo 单文件（`<stem>_motion.jpg`，JPEG 内嵌 MP4），小米/OPPO/Google Photos/三星相册可识别为动态照片；HEIC 静态帧自动转 JPEG（依赖 `pillow-heif`，已在 `requirements.txt`）
+- 加 `--ios` 用 `exiftool` 写苹果配对元数据（`<stem>_ios.heic` + `<stem>_ios.mov`），需经 Live Photo 类 App 导入图库才显示为实况；exiftool 需 `brew install exiftool`
+- 华为 HarmonyOS 动态照片为私有格式，目前无离线转换方案
 
 #### 通用网页后端
 

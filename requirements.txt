@@ -4,3 +4,4 @@ beautifulsoup4>=4.12
 curl_cffi>=0.15
 yt-dlp>=2026.6.9
 Pillow>=10.0
+pillow-heif>=1.0  # live_photo.py 处理 HEIC 实况帧转 JPEG 用
