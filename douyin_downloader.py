@@ -2,8 +2,11 @@
 """抖音图文笔记（douyin.com/note/<id>）手写解析下载。
 
 yt-dlp 的 DouyinIE 只支持 /video/ 类型，图文笔记需走手写解析：
-带有效登录 Cookie 请求笔记页，HTML 内嵌 RENDER_DATA（或 _ROUTER_DATA）JSON，
-从中递归定位 aweme detail（images/video/author）。
+带有效登录 Cookie 请求笔记页，从内嵌数据中提取 aweme detail——
+新版桌面页在 `self.__pace_f.push` 流式数据块（React Flight，主路径，
+见 parse_pace_f_detail），旧版在 RENDER_DATA JSON（递归定位，见
+extract_aweme_detail）。字段名为 camelCase（awemeId/downloadUrlList/
+authorInfo），兼容老 snake_case（aweme_id/download_url_list/author）。
 未登录 / Cookie 失效时抖音返回 jsvm 反爬挑战页（空 body + _$jsvmprt 混淆脚本），
 由 detect_jsvm_challenge 识别并提示重新填写 cookies/douyin.txt。
 
@@ -97,17 +100,63 @@ def parse_render_data(html):
     return None
 
 
+def parse_pace_f_detail(html):
+    """从 SSR 内嵌的 self.__pace_f.push 流式数据块中提取笔记详情（新版页面主路径）。
+
+    抖音桌面页 2025 年后迁移到 React Flight 架构：数据不再在 RENDER_DATA，
+    而是经 `self.__pace_f.push([1,"<chunk>"])` 分块推送——chunk 是 JSON 转义两层的
+    JS 字符串，解开后是 Flight 行数据，其中含 `"aweme":{"statusCode":0,"detail":{...}}`
+    包装段。chunk 各自独立解析，任一倍失败跳过尝试下一个。
+    """
+    if not html:
+        return None
+    pattern = re.compile(r'self\.__pace_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)', re.DOTALL)
+    for m in pattern.finditer(html):
+        try:
+            # 捕获组是 JS 字符串字面量的内容，包一层引号交给 JSON 解码恢复转义
+            payload = json.loads('"' + m.group(1) + '"')
+        except (json.JSONDecodeError, TypeError):
+            continue
+        idx = payload.find('"aweme":{')
+        if idx < 0:
+            continue
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(payload, idx + len('"aweme":'))
+        except json.JSONDecodeError:
+            continue
+        # obj 可能是包装层（带 detail 键）或直接就是详情
+        if isinstance(obj, dict):
+            detail = obj.get("detail")
+            if isinstance(detail, dict):
+                return detail
+            if obj.get("aweme_id") or obj.get("awemeId"):
+                return obj
+    return None
+
+
+def extract_note_detail(html):
+    """总入口：优先 RENDER_DATA 递归定位（旧版/通用），退回 pace_f 块（新版）。"""
+    data = parse_render_data(html)
+    if data is not None:
+        detail = extract_aweme_detail(data)
+        if detail is not None:
+            return detail
+    return parse_pace_f_detail(html)
+
+
 def extract_aweme_detail(data):
-    """在页面数据里递归定位 aweme detail（含 aweme_id 且有 images 或 video 的字典）。
+    """在页面数据里递归定位 aweme detail（含 awemeId/aweme_id 且有 images 或 video 的字典）。
 
     RENDER_DATA 的路径随页面版本变动（aweme.detail、loaderData.<route>.item_list 等），
     递归按"长得像 aweme detail"的特征找，比固定路径更抗压。
+    新字段名 camelCase（awemeId），老字段名 snake_case（aweme_id），双 key 兼容。
     """
     stack = [data]
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
-            if node.get("aweme_id") and ("images" in node or "video" in node):
+            if (node.get("aweme_id") or node.get("awemeId")) \
+                    and ("images" in node or "video" in node):
                 return node
             stack.extend(node.values())
         elif isinstance(node, list):
@@ -116,9 +165,10 @@ def extract_aweme_detail(data):
 
 
 def extract_douyin_image_url(img):
-    """从单张图片对象取直链。download_url_list（原图直链）优先于 url_list。"""
+    """从单张图片对象取直链。download 版（原图直链）优先于 url 列表。
+    新字段名 camelCase（downloadUrlList/urlList），老字段名 snake_case，双 key 兼容。"""
     img = img or {}
-    for key in ("download_url_list", "url_list"):
+    for key in ("downloadUrlList", "download_url_list", "urlList", "url_list"):
         urls = img.get(key) or []
         for u in urls:
             if u and isinstance(u, str) and u.startswith(("http://", "https://", "//")):
@@ -126,34 +176,62 @@ def extract_douyin_image_url(img):
     return None
 
 
-def extract_live_photo_url(img):
-    """实况图：图片对象上挂 video.play_addr.url_list，取首个有效直链（无则 None）。"""
-    video = (img or {}).get("video") or {}
-    play_addr = video.get("play_addr") or {}
-    for u in (play_addr.get("url_list") or []):
-        if u and isinstance(u, str):
-            return u
+def _first_play_url(video_subtree):
+    """在视频字典（camelCase/snake_case 混合）中找首个可播放直链。
+
+    兼容多种形态：snake `play_addr.url_list`、camel `playAddr`（可能是
+    字符串列表或带 urlList 的字典）、`bitRate`/`bitRateList` 分档流。
+    cover 封面键跳过——它是图片不是播放地址。
+    """
+    video_subtree = video_subtree or {}
+    _PRIORITY_KEYS = (
+        "play_addr", "download_addr", "playAddr", "playAddrH265",
+        "play_addr_h265", "bitRate", "bitRateList", "playApi",
+    )
+
+    def _urls_in(node):
+        if isinstance(node, str):
+            if node.startswith(("http://", "https://", "//")):
+                yield node
+        elif isinstance(node, dict):
+            for k, v in node.items():
+                if isinstance(k, str) and k.startswith("cover"):
+                    continue
+                yield from _urls_in(v)
+        elif isinstance(node, list):
+            for v in node:
+                yield from _urls_in(v)
+
+    for key in _PRIORITY_KEYS:
+        sub = video_subtree.get(key)
+        if sub:
+            for u in _urls_in(sub):
+                return u
+    for u in _urls_in(video_subtree):
+        return u
     return None
+
+
+def extract_live_photo_url(img):
+    """实况图：图片对象上挂 video 播放地址，取首个有效直链（无则 None）。"""
+    video = (img or {}).get("video") or {}
+    return _first_play_url(video)
 
 
 def extract_note_video_url(video):
     """笔记级视频直链。返回 (url, reason)——url 为 None 时 reason 说明原因。"""
-    video = video or {}
-    play_addr = video.get("play_addr") or {}
-    urls = play_addr.get("url_list") or []
-    if urls:
-        return urls[0], None
-    download_addr = video.get("download_addr") or {}
-    urls = download_addr.get("url_list") or []
-    if urls:
-        return urls[0], None
-    return None, "无 play_addr/download_addr.url_list"
+    url = _first_play_url(video or {})
+    if url:
+        return url, None
+    return None, "video 子树中未找到可播放直链（play_addr/playAddr/bitRate 均空）"
 
 
 def extract_douyin_author(detail):
-    """从 aweme detail 取作者昵称。author.nickname / unique_id 双 key 兜底。"""
-    author = (detail or {}).get("author") or {}
-    return author.get("nickname") or author.get("unique_id") or ""
+    """从 aweme detail 取作者昵称。authorInfo（新版）或 author（旧版），
+    nickname / uniqueId / unique_id 依次兜底。"""
+    detail = detail or {}
+    author = detail.get("authorInfo") or detail.get("author") or {}
+    return author.get("nickname") or author.get("uniqueId") or author.get("unique_id") or ""
 
 
 def resolve_douyin_basename(detail):
@@ -263,25 +341,19 @@ def download_douyin_note(url, cookie):
         )
         return
 
-    data = parse_render_data(html)
-    if data is None:
+    detail = extract_note_detail(html)
+    if detail is None:
         logger.error(
-            "未能找到页面数据（RENDER_DATA/_ROUTER_DATA）。"
-            "可能是页面结构变更或 Cookie 失效。（耗时 %.1f 秒）",
+            "未在页面数据中定位到笔记详情（RENDER_DATA/pace_f 均无 aweme detail）。"
+            "可能是页面结构已更新或 Cookie 失效。（耗时 %.1f 秒）",
             time.time() - start_time,
         )
         return
 
-    detail = extract_aweme_detail(data)
-    if detail is None:
-        logger.error(
-            "未在页面数据中定位到笔记详情（aweme detail）。"
-            "可能是页面结构已更新。（耗时 %.1f 秒）", time.time() - start_time)
-        return
-
-    # 笔记 ID 优先取自 URL（可溯源），缺失时用 detail.aweme_id
+    # 笔记 ID 优先取自 URL（可溯源），缺失时用 detail 的 awemeId/aweme_id
     m = _NOTE_URL_RE.search(url)
-    aweme_id = (m.group("id") if m else None) or str(detail.get("aweme_id") or "")
+    aweme_id = (m.group("id") if m else None) \
+        or str(detail.get("aweme_id") or detail.get("awemeId") or "")
     safe_title = f"{resolve_douyin_basename(detail)}_{aweme_id}" if aweme_id \
         else resolve_douyin_basename(detail)
 
