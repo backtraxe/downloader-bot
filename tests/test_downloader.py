@@ -208,3 +208,45 @@ class TestResolveShortLink:
         monkeypatch.setattr("http_client.get", lambda url, **kw: FakeResp())
         result = resolve_short_link("https://b23.tv/wR0HJVE")
         assert result == "https://b23.tv/wR0HJVE"
+
+
+class TestDispatchDouyinNoteRouting:
+    """douyin 图文笔记（/note/）应路由到 douyin_downloader 手写解析，不进 yt-dlp。"""
+
+    def test_note_url_routes_to_douyin_downloader(self, monkeypatch):
+        import downloader
+
+        calls = []
+        monkeypatch.setattr("sites.load_cookie_for_url", lambda url: "raw_cookie")
+        monkeypatch.setattr(
+            "douyin_downloader.download_douyin_note",
+            lambda url, cookie: calls.append(("note", url, cookie)),
+        )
+        downloader.dispatch_url("https://www.douyin.com/note/7666381907030529443")
+        # 原始文件内容（可能是 Netscape）经 cookie_text_to_header 转换为请求头
+        assert calls == [("note", "https://www.douyin.com/note/7666381907030529443", "raw_cookie")]
+
+    def test_note_url_without_cookie_skips_download(self, monkeypatch):
+        import downloader
+
+        calls = []
+        monkeypatch.setattr("sites.load_cookie_for_url", lambda url: None)
+        monkeypatch.setattr(
+            "douyin_downloader.download_douyin_note",
+            lambda url, cookie: calls.append(("note", url, cookie)),
+        )
+        downloader.dispatch_url("https://www.douyin.com/note/7666381907030529443")
+        assert calls == []
+
+    def test_video_url_not_misrouted_to_note_parser(self, monkeypatch):
+        import downloader
+
+        note_calls, ytdlp_calls = [], []
+        monkeypatch.setattr(
+            "douyin_downloader.download_douyin_note",
+            lambda url, cookie: note_calls.append(url),
+        )
+        monkeypatch.setattr("downloader.download_url", lambda u: ytdlp_calls.append(u))
+        downloader.dispatch_url("https://www.douyin.com/video/7666381907030529443")
+        assert note_calls == []
+        assert ytdlp_calls == ["https://www.douyin.com/video/7666381907030529443"]

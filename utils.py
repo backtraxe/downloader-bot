@@ -287,3 +287,29 @@ def cookie_header_to_netscape(header, domain, out_path=None):
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(content)
     return content
+
+
+def cookie_text_to_header(text):
+    """把 cookie 文件内容统一转成 `Cookie:` 请求头字符串。
+
+    cookie_header_to_netscape 的逆操作：站点 cookie 文件（cookies/<站点>.txt）
+    可能是 Netscape 格式（yt-dlp 用），也可能是浏览器复制的请求头整段；
+    手写解析器（xhs/douyin）塞请求头时只需一种格式。规则：
+    - 行首 # 或空行：忽略
+    - Tab 分隔且 >=7 个字段的行：按 Netscape 解析，取 name/value 两段
+    - 其他行：原样拼接（兼容把请求头整段直接存进文件的场景）
+    """
+    pairs = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        # Netscape 行：domain  flag  path  secure  expires  name  value
+        if len(fields) >= 7:
+            name, value = fields[5].strip(), fields[6].strip()
+            if name:
+                pairs.append(f"{name}={value}")
+        else:
+            pairs.append(line)
+    return "; ".join(pairs)

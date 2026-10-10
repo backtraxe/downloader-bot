@@ -3,7 +3,8 @@
 
 按 URL 自动识别站点并分发到对应下载器：
   - xiaohongshu → xhs_downloader（手写 __INITIAL_STATE__ 解析）
-  - bilibili / douyin / youtube / instagram / twitter → yt-dlp
+  - 抖音图文笔记（/note/）→ douyin_downloader（手写 RENDER_DATA 解析）
+  - bilibili / douyin 视频 / youtube / instagram / twitter → yt-dlp
   - 其他站点 → 1024_downloader（通用静态网页抓取）
 
 用法：
@@ -22,7 +23,7 @@ from sites import (
     cookie_file_for,
     get_site_name,
 )
-from utils import extract_urls, sanitize_filename, setup_logging
+from utils import cookie_text_to_header, extract_urls, sanitize_filename, setup_logging
 from urllib.parse import urljoin, urlparse
 
 logger = setup_logging()
@@ -201,9 +202,10 @@ _YTDLP_SITES = frozenset(SITE_REQUIRE_COOKIE.keys()) - {"xiaohongshu"}
 def dispatch_url(url):
     """统一入口：按站点自动分发到对应下载器。
 
-    xiaohongshu → xhs_downloader（手写解析，需 Cookie）
-    yt-dlp 站点  → download_url（bilibili / douyin / youtube / instagram / twitter）
-    其他站点     → 1024_downloader（通用静态网页抓取）
+    xiaohongshu     → xhs_downloader（手写解析，需 Cookie）
+    抖音图文笔记    → douyin_downloader（手写解析，需登录 Cookie）
+    yt-dlp 站点     → download_url（bilibili / douyin 视频 / youtube / instagram / twitter）
+    其他站点        → 1024_downloader（通用静态网页抓取）
     """
     site_name = get_site_name(url)
 
@@ -215,6 +217,22 @@ def dispatch_url(url):
         cookie = load_cookie_for_url(url)
         if cookie:
             download_xhs_media(url, cookie)
+        return
+
+    if site_name == "douyin":
+        # 抖音图文笔记（/note/）yt-dlp 不支持，走手写解析；
+        # 短链先展开才能判断目标类型（/note/ 手写解析，/video/ 走 yt-dlp）
+        from douyin_downloader import download_douyin_note, is_douyin_note_url
+
+        resolved = resolve_short_link(url)
+        if is_douyin_note_url(resolved):
+            from sites import load_cookie_for_url
+
+            cookie = load_cookie_for_url(url)
+            if cookie:
+                download_douyin_note(resolved, cookie_text_to_header(cookie))
+        else:
+            download_url(url)
         return
 
     if site_name in _YTDLP_SITES:

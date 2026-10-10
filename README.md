@@ -25,7 +25,7 @@ python downloader.py
 | 小红书 | `xiaohongshu.com` / `xhslink.com` | 手写 `__INITIAL_STATE__` 解析 | 建议 |
 | YouTube | `youtube.com` / `youtu.be` | yt-dlp | 通常不需要 |
 | Bilibili | `bilibili.com` / `b23.tv` | yt-dlp | 建议（下高清需要） |
-| 抖音 | `douyin.com` / `v.douyin.com` | yt-dlp | 建议 |
+| 抖音 | `douyin.com` / `v.douyin.com` | yt-dlp（视频）+ 手写图文解析（笔记） | 视频通常不需要；图文笔记需要登录态 |
 | Instagram | `instagram.com` / `instagr.am` | yt-dlp | 强烈建议（否则大概率失败） |
 | X(Twitter) | `x.com` / `twitter.com` / `t.co` | yt-dlp | 通常不需要 |
 | 其他网站 | 任意 | 通用静态网页抓取 | 按域名命名 |
@@ -54,6 +54,13 @@ python live_photo.py "download/xiaohongshu/<作者>/<标题>_<noteId>"
 - 默认生成 Android 侧 Motion Photo 单文件（`<stem>_motion.jpg`，JPEG 内嵌 MP4），小米/OPPO/Google Photos/三星相册可识别为动态照片；HEIC 静态帧自动转 JPEG（依赖 `pillow-heif`，已在 `requirements.txt`）
 - 加 `--ios` 用 `exiftool` 写苹果配对元数据（`<stem>_ios.heic` + `<stem>_ios.mov`），需经 Live Photo 类 App 导入图库才显示为实况；exiftool 需 `brew install exiftool`
 - 华为 HarmonyOS 动态照片为私有格式，目前无离线转换方案
+
+#### 抖音图文笔记后端
+
+- 抖音图文笔记（`douyin.com/note/<id>`，App 分享文案常见）yt-dlp 不支持，由 `douyin_downloader.py` 手写解析：带登录 Cookie 请求笔记页，从内嵌的 `RENDER_DATA`（或 `_ROUTER_DATA`）JSON 中提取图片列表与视频
+- **必须填有效登录态 Cookie** 到 `cookies/douyin.txt`：无 Cookie 时抖音返回 jsvm 反爬挑战页，脚本会识别并提示；Netscape 格式和浏览器复制的 `Cookie:` 请求头整段都能吃（脚本自动识别转换），与 yt-dlp 侧共用同一个文件
+- 输出 `download/douyin/[<作者>/]<标题>_<awemeId>/`，图片按 `001.jpg` 序号命名，实况图视频同序号配对 `001.mp4`，笔记级视频为 `video.mp4`
+- 抖音视频链接（`/video/<id>`）不受影响，仍走 yt-dlp
 
 #### 通用网页后端
 
@@ -141,7 +148,8 @@ iOS 没有 DevTools，也**无法**用“快捷指令”读取 Safari 的 Cookie
 
 - Cookie 是敏感凭据，`cookies/` 已在 `.gitignore` 中，**切勿提交**。
 - Cookie 有有效期，失效后需重新获取（典型症状：bilibili 下不到高清、instagram 报“需要登录”、小红书提示风控）。
-- 各站点需要的关键 Cookie：bilibili → `SESSDATA`；instagram → `sessionid`；小红书 → `web_session` / `a1`。
+- 各站点需要的关键 Cookie：bilibili → `SESSDATA`；instagram → `sessionid`；小红书 → `web_session` / `a1`；抖音（图文笔记）→ `sessionid` / `ttwid`。
+- 抖音图文笔记的是手写解析后端，与 yt-dlp 共用 `cookies/douyin.txt`：Netscape 格式或 `Cookie:` 请求头整段都可以（脚本经 `cookie_text_to_header` 自动识别转换），但**必须含有效登录态**，否则抖音返回 jsvm 反爬挑战页。
 
 ## 测试
 

@@ -11,8 +11,9 @@ README 已重写为中文并与当前代码一致，是本仓库的权威使用�
 ## 项目结构
 
 ```
-downloader.py        # 统一入口——dispatch_url() 按站点名路由到三个后端之一
+downloader.py        # 统一入口——dispatch_url() 按站点名路由到各后端
 xhs_downloader.py    # 小红书笔记解析（手写 __INITIAL_STATE__ 提取）
+douyin_downloader.py # 抖音图文笔记解析（手写 RENDER_DATA 提取，需登录 Cookie）
 1024_downloader.py   # 通用静态网页抓取（curl_cffi TLS 伪装）
 http_client.py       # HTTP 统一封装：curl_cffi 优先，不可用时降级系统 curl 命令
 sites.py             # URL→站点名映射、Cookie 文件加载（新增站点识别只改这里）
@@ -30,11 +31,11 @@ download/            # 输出目录，download/<站点>[/<作者>]/<标题>[_<ID
 python -m venv .venv && source .venv/bin/activate   # 可选但推荐
 pip install -r requirements.txt
 pip install pytest
-python -m pytest -q                                  # 237 个单元测试，全部离线
+python -m pytest -q                                  # 304 个单元测试，全部离线
 python downloader.py                                 # 统一入口，按 URL 自动路由
 ```
 
-注意：裸 `pytest -q` 在没有 conftest.py 的情况下不会把项目根加入 `sys.path`，会因 `ModuleNotFoundError` 收集失败；统一用 `python -m pytest -q`（或补充 conftest.py）。当前 237 个测试全部通过（已验证）。
+注意：裸 `pytest -q` 在没有 conftest.py 的情况下不会把项目根加入 `sys.path`，会因 `ModuleNotFoundError` 收集失败；统一用 `python -m pytest -q`（或补充 conftest.py）。当前 304 个测试全部通过（已验证）。
 
 ## 下载器架构
 
@@ -43,8 +44,11 @@ python downloader.py                                 # 统一入口，按 URL �
 | 路由 | 后端 |
 |------|------|
 | xiaohongshu | `xhs_downloader.download_xhs_media`（手写解析，需 Cookie） |
-| bilibili / douyin / youtube / instagram / twitter | `download_url` → yt-dlp |
+| 抖音图文笔记（/note/） | `douyin_downloader.download_douyin_note`（手写解析，需登录 Cookie） |
+| bilibili / douyin 视频 / youtube / instagram / twitter | `download_url` → yt-dlp |
 | 其余任意站点 | `1024_downloader.extract_general_media`（通用静态抓取） |
+
+注意：douyin 必须先 `resolve_short_link` 展开短链（v.douyin.com）才能判断目标是 /note/（手写解析）还是 /video/（yt-dlp）——yt-dlp 的 DouyinIE 只认 /video/，图文笔记交它会报 `Unsupported URL`。
 
 **`downloader.py`（yt-dlp 后端）。** `download_url` 采用两段式：先 `extract_info(download=False)` 探一次拿作者（`resolve_uploader` 取 `uploader` 并 `sanitize_filename` 清洗），再 `build_ydl_opts(site, author=...)` 构造选项后真正下载。代价是多一次请求；收益是作者缺失时自然退化为无作者层，不产生 `NA/` 或 `unknown/` 占位目录。cookiefile 仅当 `cookies/<site>.txt` 存在且非空时才传入。短链（`b23.tv`/`v.douyin.com`/`youtu.be`/`t.co`/`instagr.am`/`xhslink.com`）先经 `resolve_short_link` 用 http_client 展开为最终 URL——yt-dlp 走 Python socket 做 DNS，部分环境（沙箱、Termux）对短链域名解析失败，curl 自带解析器正常。yt-dlp 保持静默（`quiet`/`noprogress`），进度经 `progress_hooks` 转 logging。瞬时网络错误（SSL EOF、连接重置、超时、DNS 失败、502/503）由 `diagnose_error` 识别后整链退避重试最多 3 次；登录类错误翻译成"需登录 / Cookie 失效"提示。**新增站点首选这个入口**——yt-dlp 已覆盖上千站点，通常只需在 `sites.py` 加映射。
 
@@ -52,11 +56,13 @@ python downloader.py                                 # 统一入口，按 URL �
 
 **`xhs_downloader.py`（小红书）。** 手写正则提取 `window.__INITIAL_STATE__={...}`（比 yt-dlp 对小红书更可控），经 `normalize_xhs_state_json` 只把 JSON 值语境的 `undefined` 替换为 `null`，再遍历 `note.noteDetailMap.<id>.note`：图片经 `extract_image_url` 优先用 `imageList[].fileId` 拼 `ci.xiaohongshu.com/<fileId>` 原图直链（未转码、尺寸与 note 声明宽高一致），fileId 缺失才回退 `urlDefault` 展示版压缩 webp；实况照片（live photo）每张 image 的 `stream.EF4~EF7` 档位里另有 h264 视频流，经 `extract_live_photo_stream` 与静态图一并下载——同序号配对 `001.heic` + `001.mp4`（静态图为 HEIF/MPO 原图，实况视频按 qualityType 选最高档）。部分原图实为 HEIF（`image/heic`），扩展名按 Content-Type 校正为 `.heic`（HEIF 无 Pillow 解码时 `get_image_dimensions` 返回 None，装饰过滤自动回退体积判定）；视频经 `extract_video_url` 从 `video.media.stream.h264` 按 `qualityType`(HD>SD>LD)/`videoBitrate` 选最高画质流而非首项。用 stdlib `requests`（区别于 1024 的 curl_cffi），Session 配 urllib3 Retry（total=5, backoff）。作者经 `extract_xhs_author` 取 `note.user.nickname`/`nickName` 双 key 兼容。检测风控（"验证码"/"访问过于频繁"/重定向到 verify/login/captcha，由 `detect_risk_control`）与笔记不存在（`/404` 路径、`errorCode=-510001`、"你访问的页面不见了" title，由 `detect_note_not_found`），避免 404 页被误报为"页面结构变更"。媒体 URL 统一经 `ensure_https` 升级。输出 `download/xiaohongshu/[<作者>/]<标题>_<noteId>/`，无标题笔记基名经 `resolve_xhs_basename` 回退链（title → desc 前 30 字 → `#tag1 #tag2` → `xhs`，全空兜底 `xhs_<noteId>`）；目录内图片按 `001.jpg` 序号命名、视频固定 `video.mp4`。
 
+**`douyin_downloader.py`（抖音图文笔记）。** 手写解析 `douyin.com/note/<id>`：yt-dlp 的 DouyinIE 只支持 /video/，图文笔记路面页面带有效登录 Cookie 时内嵌 `RENDER_DATA`（`<script id="RENDER_DATA">` 内 URL 编码 JSON，次选 `window._ROUTER_DATA` 赋值），由 `parse_render_data` 取出后经 `extract_aweme_detail` 递归按特征定位（dict 含 `aweme_id` 且有 `images`/`video`，不绑死路径）。图片经 `extract_douyin_image_url` 取 `download_url_list` 优先、`url_list` 兜底；实况图（image 上挂 `video.play_addr.url_list`）经 `extract_live_photo_url` 与静态图同序号配对；笔记级视频经 `extract_note_video_url`（`play_addr` → `download_addr`）落 `video.mp4`。未登录/Cookie 失效时抖音返回 jsvm 反爬挑战页（空 body + `_$jsvmprt` 混淆脚本），由 `detect_jsvm_challenge` 识别并提示重新填写 cookies/douyin.txt——纯 HTTP 无法通过该挑战，必须填登录态。HTTP 走 http_client（curl_cffi `impersonate="chrome110"`，Termux 自动降级系统 curl），与 1024 同路。Cookie 文件两种格式皆可：Netscape（与 yt-dlp 侧共用 cookies/douyin.txt）或浏览器复制的 `Cookie:` 请求头整段，经 `utils.cookie_text_to_header` 统一转请求头。输出 `download/douyin/[<作者>/]<desc 前 30 字>_<awemeId>/`（`resolve_douyin_basename`，desc 空兜底 `douyin`），作者经 `extract_douyin_author` 取 `author.nickname`/`unique_id` 兜底。
+
 **`1024_downloader.py`（通用静态抓取）。** 用 `curl_cffi` 的 `impersonate="chrome110"` 做 TLS 指纹伪装绕过防盗链/CDN。页面请求经 `fetch_page` 封装：`429` 限流、所有 `5xx`（含腾讯云 EdgeOne WAF 的非标拦截码 `567`，酷安等站点会间歇返回"请求已被站点的安全策略拦截"页）及网络异常按指数退避重试至多 3 次（`_is_block_status` 判定），`4xx` 确定性错误立即放弃。深扫 `<img>/<source>/<video>` 的懒加载属性（`data-src`、`data-original`、`ess-data` 等）、`<a href>` 直链、行内 `style` 的 `url()` 背景图。装饰资源过滤：扫描阶段（`collect_media_urls._add`）按原始 URL 文件名命中 `_DECORATIVE_KEYWORDS`（logo/avatar/qrcode/emotion/beian/icon 等）剔除——必须在此时做，落盘会被序号重命名为 `001.<ext>`，下载阶段已拿不到原始关键词；下载后按宽高过滤——`utils.get_image_dimensions` 用 Pillow 解析图片宽高（解析失败返回 None），短边 < `MIN_IMAGE_DIMENSION`（300px）判为装饰图删除，尺寸解析失败回退体积阈值 `MIN_IMAGE_BYTES`（20KB）；视频不过滤（短视频也可能很小）。下载时 `Referer` 设为页面 URL（破解防盗链的关键），拦截到 HTML 响应（被风控）直接判失败，扩展名按 URL + Content-Type 校正（`guess_extension`）。`ThreadPoolExecutor(max_workers=5)` 并发，请求间 0.5–1.5s 随机延迟防封 IP。媒体扫描由 `collect_media_urls` 按 DOM 顺序保序去重；落盘按 `build_media_tasks` 序号命名 `001.<ext>`（目录名已带标题与 ID，文件本体只要序号；与小红书同风格，目录内按序号还原帖内次序），不再保留远端乱序哈希名。作者经 `extract_page_author` 两级提取：DOM 选择器（酷安 `.username-item`）优先，`<title>` 的"正文 来自 作者 - 站点"后缀模式兜底；命中时标题剥离作者尾巴（避免目录名重复），未命中返回空串自然退化为无作者层。输出 `download/<站点>[/<作者>/]<标题>[_<数字ID>]/`——URL 末段含 ≥5 位数字 ID 时经 `utils.extract_url_numeric_id` 追加后缀（`make_page_dir_name`），同标题可区分、目录可溯源。
 
 **`http_client.py`（HTTP 统一封装）。** 提供 `Session` 和模块级 `get()`。curl_cffi 可用时委托给它；不可用时（Termux 上编译扩展常因 Python ABI 不匹配加载失败）降级为系统 `curl` 命令（subprocess），返回兼容 requests 接口的 `CurlResponse`（`text`/`headers`/`iter_content`/`raise_for_status`/`json`）。系统 curl 不做 JA3 伪装，只加 `--http2`（硬编码 cipher/curve 反而会 TLS 握手失败）。被 `1024_downloader` 和 `downloader.py` 的短链展开共用。
 
-**`utils.py`（共用工具）。** `setup_logging`（幂等）、`init_useragent`（fake_useragent 随机 UA，多采样探测不可用时降级固定 Chrome UA）、`extract_urls`（从粘贴的分享文案中提取 URL，剔除尾部中文/标点）、`sanitize_filename`、`build_download_dir`（作者非空才加层，防御目录穿越）、`unique_path`（`O_CREAT|O_EXCL` 原子占位去重，并发不撞名）、`guess_extension`、`normalize_url`、`is_html_content`、`normalize_xhs_state_json`、`cookie_header_to_netscape`（把 `Cookie:` 请求头字符串转成 yt-dlp 可读的 Netscape 文件）。
+**`utils.py`（共用工具）。** `setup_logging`（幂等）、`init_useragent`（fake_useragent 随机 UA，多采样探测不可用时降级固定 Chrome UA）、`extract_urls`（从粘贴的分享文案中提取 URL，剔除尾部中文/标点）、`sanitize_filename`、`build_download_dir`（作者非空才加层，防御目录穿越）、`unique_path`（`O_CREAT|O_EXCL` 原子占位去重，并发不撞名）、`guess_extension`、`normalize_url`、`is_html_content`、`normalize_xhs_state_json`、`cookie_header_to_netscape`（把 `Cookie:` 请求头字符串转成 yt-dlp 可读的 Netscape 文件）、`cookie_text_to_header`（逆操作：Netscape 文件/请求头整段统一转回 `Cookie:` 头，douyin_downloader 用）。
 
 **`live_photo.py`（实况后处理，独立模块）。** 把小红书实况对儿(`001.heic`+`001.mp4`)打包为平台可用格式：`--android`（默认）把 HEIC 转 JPEG（pillow-heif，可选依赖——无 HEIC 时不需安装）+ MP4 mux 成 Motion Photo 单文件（`<stem>_motion.jpg`，双写 Camera + MicroVideo 两种 XMP）；`--ios` 用 exiftool 写配对 ContentIdentifier 输出 `<stem>_ios.{heic,mov}`。华为的私有格式不支持。**注意**：mux 时 XMP 段必须紧跟 JPEG SOI 之后；被下载器完全解耦——不被 downloader/1024/xhs 任何模块 import，独立 CLI 使用。
 
@@ -73,13 +79,14 @@ python downloader.py                                 # 统一入口，按 URL �
 
 ## 测试
 
-pytest 是唯一框架，237 个测试全部离线（不联网）。测试位于 `tests/test_<模块>.py`，只覆盖纯函数：`get_site_name`、`resolve_uploader`、`build_ydl_opts`、`dispatch_url`、`diagnose_error`、`resolve_short_link`、`detect_risk_control`、`detect_note_not_found`、`extract_xhs_author`、`extract_image_url`、`extract_video_url`（含多画质流选择）、`ensure_https`、`_is_transient_error`、`_is_block_status`、`fetch_page`、`_is_decorative_name`、`download_file`（注入假 session）、`get_image_dimensions`（Pillow 生成真实图片）、`extract_url_numeric_id`、`make_page_dir_name`、`collect_media_urls`（构造 HTML 字符串）、`build_media_tasks`、sanitize/build_download_dir/unique_path/cookie_header_to_netscape 等。新增 URL 或解析分支时按 `tests/test_sites.py` 的方式用参数化用例；新的公共函数应附带测试。提交前跑 `python -m pytest -q`。
+pytest 是唯一框架，304 个测试全部离线（不联网）。测试位于 `tests/test_<模块>.py`，只覆盖纯函数：`get_site_name`、`resolve_uploader`、`build_ydl_opts`、`dispatch_url`（含 douyin /note/ 路由）、`diagnose_error`、`resolve_short_link`、`detect_risk_control`、`detect_note_not_found`、`extract_xhs_author`、`extract_image_url`、`extract_video_url`（含多画质流选择）、`ensure_https`、`_is_transient_error`、`_is_block_status`、`fetch_page`、`_is_decorative_name`、`download_file`（注入假 session）、`get_image_dimensions`（Pillow 生成真实图片）、`extract_url_numeric_id`、`make_page_dir_name`、`collect_media_urls`（构造 HTML 字符串）、`build_media_tasks`、`detect_jsvm_challenge`、`parse_render_data`/`extract_aweme_detail`/`extract_douyin_image_url`/`extract_douyin_author`/`resolve_douyin_basename`（构造 RENDER_DATA 页面 fixture）、sanitize/build_download_dir/unique_path/cookie_header_to_netscape/cookie_text_to_header 等。新增 URL 或解析分支时按 `tests/test_sites.py` 的方式用参数化用例；新的公共函数应附带测试。提交前跑 `python -m pytest -q`。
 
 ## Cookie 与安全
 
 - Cookie 是每站点一个纯文本文件：`cookies/<站点名>.txt`。文件缺失或为空时脚本自动创建并提示用户填写。
 - `download/` 和 `cookies/` 都已 gitignore，**绝不提交**；不要打印 cookie 内容。
 - **两个入口的 cookie 格式不同**：yt-dlp 后端（downloader.py）要 Netscape cookie 文件（可用 `utils.cookie_header_to_netscape` 转换）；xhs_downloader 直接把文件内容塞进 `Cookie:` 请求头，要的是浏览器复制的请求头整段字符串。填错格式会被静默忽略或判定未登录（详见 README）。
+- douyin 是唯一两个后端共用同一文件的站点：视频（yt-dlp）用 Netscape 格式，图文笔记（douyin_downloader）经 `cookie_text_to_header` 自动识别两种格式——推荐统一填 Netscape，两种下载器都能用。
 
 ## 提交与 PR
 
