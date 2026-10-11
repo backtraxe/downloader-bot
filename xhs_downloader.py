@@ -13,7 +13,6 @@ from utils import (
     build_download_dir,
     extract_urls,
     guess_extension,
-    init_useragent,
     normalize_xhs_state_json,
     sanitize_filename,
     setup_logging,
@@ -22,17 +21,19 @@ from utils import (
 
 logger = setup_logging()
 
-# 初始化 fake_useragent，尽量生成 PC 端的 User-Agent
-# 这样可以确保请求到的是小红书的网页端，从而顺利提取 __INITIAL_STATE__
-ua, _FALLBACK_UA = init_useragent(logger)
+# TLS 指纹与 UA 必须对齐同一 Chrome 大版本。2026-10 实测：chrome110 / 老
+# requests 通道 + 随机 UA 的组合会被小红书一律 302 到 /login（很像 Cookie
+# 失效），chrome150 + UA150 一致组合即使无 Cookie 也能进笔记页。
+# 因此不再用 fake_useragent 随机 UA（与 impersonate 指纹版本必然不一致）。
+_IMPERSONATE = "chrome150"
+_UA150 = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
 
 
 def get_headers(cookie):
-    """动态生成请求头，使用 fake_useragent 随机替换 UA；不可用时降级固定 UA。"""
-    user_agent = ua.random if ua else _FALLBACK_UA
-
+    """生成请求头。UA 与 impersonate 指纹版本严格一致（Chrome 150）。"""
     return {
-        "User-Agent": user_agent,
+        "User-Agent": _UA150,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Cookie": cookie,
@@ -100,7 +101,7 @@ def download_file(session, url, filepath, headers, max_retries=5):
             # 引入 0.1 ~ 0.5 秒的随机延迟，防止并发过高被瞬间阻断连接
             time.sleep(random.uniform(0.1, 0.5))
             r = session.get(url, headers=headers, stream=True, timeout=15,
-                            impersonate="chrome110")
+                            impersonate=_IMPERSONATE)
             r.raise_for_status()
 
             # 从响应头推断真实扩展名，修正 filepath（避免 webp 存成 .jpg）
@@ -303,7 +304,7 @@ def _fetch_page(session, url, headers, max_retries=5):
     for attempt in range(1, max_retries + 1):
         try:
             response = session.get(url, headers=headers, allow_redirects=True,
-                                   timeout=15, impersonate="chrome110")
+                                   timeout=15, impersonate=_IMPERSONATE)
             response.raise_for_status()
             return response
         except Exception as e:
