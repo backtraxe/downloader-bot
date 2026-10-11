@@ -27,7 +27,6 @@ from utils import (
     build_download_dir,
     extract_urls,
     guess_extension,
-    init_useragent,
     is_html_content,
     sanitize_filename,
     setup_logging,
@@ -37,7 +36,11 @@ from xhs_downloader import _is_transient_error, ensure_https
 
 logger = setup_logging()
 
-ua, _FALLBACK_UA = init_useragent(logger)
+# TLS 指纹与 UA 必须对齐同一 Chrome 大版本——fake_useragent 随机 UA
+# 池里有老版本/非 Chrome 串，与 impersonate 指纹混搭会概率性触发风控
+_IMPERSONATE = "chrome150"
+_UA150 = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
 
 # 抖音图文笔记 URL：/note/<数字ID>
 _NOTE_URL_RE = re.compile(r"https?://(?:www\.)?douyin\.com/note/(?P<id>\d+)")
@@ -45,9 +48,11 @@ _NOTE_URL_RE = re.compile(r"https?://(?:www\.)?douyin\.com/note/(?P<id>\d+)")
 # jsvm 反爬挑战页特征：未登录/失效 Cookie 时返回空 body + VM 混淆脚本
 _JSVM_CHALLENGE_MARKER = "_$jsvmprt"
 
-# 验证码中间页特征：IP+Cookie 组合被限流时返回 sec_sdk captcha 页面
-# （真实案例：Termux 移动网络下高频请求同一链接触发，正文 6329 字节）
-_CAPTCHA_PAGE_MARKERS = ("验证码中间页", "sec_sdk_build", "/captcha/")
+# 验证码中间页特征：IP+Cookie 组合被限流时返回 sec_sdk captcha 中间页
+# （真实案例：Termux 移动网络下高频请求同一链接触发，正文 6329 字节）。
+# 只能用 title 判定——"sec_sdk_build"/"/captcha/" 也会出现在正常笔记页
+# 的防盗脚本里，用它匹配会把正常页面误判为验证码页（2026-10 实测翻车）
+_CAPTCHA_PAGE_MARKERS = ("<title>验证码中间页</title>",)
 
 # 所有"反爬拦截页"标记（任一命中即视为被拦截）
 _CHALLENGE_MARKERS = (_JSVM_CHALLENGE_MARKER, *_CAPTCHA_PAGE_MARKERS)
@@ -63,8 +68,9 @@ def detect_jsvm_challenge(html):
 
     两种已知形态：
       1. jsvm 挑战页 —— 无登录态/指纹可疑时返回空 body + _$jsvmprt VM 混淆脚本
-      2. 验证码中间页 —— 高频/可疑 IP 触发限流时返回 sec_sdk captcha 页面
-         （正文仅 ~6KB，含 title=验证码中间页）
+      2. 验证码中间页 —— 高频/可疑 IP 触发限流时返回 captcha 页面
+         （正文仅 ~6KB，title=验证码中间页；只能按 title 判定，路径
+         里的 sec_sdk_build 在真实笔记页同样出现，命中会误伤）
     纯 HTTP 客户端都无法通过，命中即判为 Cookie/IP 侧问题。
     """
     if not html:
@@ -73,9 +79,14 @@ def detect_jsvm_challenge(html):
 
 
 def get_headers(cookie):
-    """生成请求头。UA 走 fake_useragent 随机，Cookie 由调用方提供。"""
+    """生成请求头。UA 与 impersonate 指纹版本严格一致（Chrome 150）。
+
+    实测（2026-10，captcha 中间页对照实验）：固定一致的指纹组合
+    6/6 全部通过；fake_useragent 随机 UA 与 impersonate TLS 版本不一致
+    的组合会概率性触发验证码中间页。因此抖音侧不用随机 UA。
+    """
     return {
-        "User-Agent": ua.random if ua else _FALLBACK_UA,
+        "User-Agent": _UA150,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Cookie": cookie,
@@ -257,14 +268,34 @@ def resolve_douyin_basename(detail):
 
 def _fetch_page(session, url, headers, max_retries=5):
     """请求笔记页并跟随重定向（curl_cffi 默认跟随），瞬时错误自动重试。
-    全部失败返回 None。"""
+    全部失败返回 None。
+
+    验证码中间页重试时每次都换新 Session：第一次被拦后服务商会通过
+    Set-Cookie 在 jar 里埋下"标记"，复用同一 Session 重试会被持续拦截
+    （对照实验：同一会话 3 连拦，而全新会话单发 10/10 全通过）。
+    """
     url = ensure_https(url)
     last_err = None
     for attempt in range(1, max_retries + 1):
         try:
             response = session.get(
-                url, headers=headers, timeout=15, impersonate="chrome110")
+                url, headers=headers, timeout=15, impersonate=_IMPERSONATE)
             response.raise_for_status()
+            # 验证码中间页重试：换新 Session（见函数 docstring）、拉长间隔，
+            # 只重试 2 次；仍命中交回调用方提示冷却
+            if detect_jsvm_challenge(response.text) \
+                    and any(m in response.text for m in _CAPTCHA_PAGE_MARKERS) \
+                    and attempt < min(max_retries, 3):
+                wait = 5 + random.uniform(0, 3)
+                logger.warning("触发验证码中间页（第 %d/%d 次），%.1fs 后新会话重试",
+                               attempt, min(max_retries, 3), wait)
+                try:
+                    session.close()
+                except Exception:
+                    pass
+                session = http_client.Session()
+                time.sleep(wait)
+                continue
             return response
         except Exception as e:
             last_err = e
@@ -293,7 +324,7 @@ def download_file(session, url, filepath, headers, max_retries=5):
             # 与 1024 同一量级：0.5–1.5s 随机间隔，避免触发限流
             time.sleep(random.uniform(0.5, 1.5))
             r = session.get(
-                url, headers=headers, timeout=15, impersonate="chrome110", stream=True)
+                url, headers=headers, timeout=15, impersonate=_IMPERSONATE, stream=True)
             r.raise_for_status()
 
             content_type = r.headers.get("Content-Type", "") or r.headers.get("content-type", "")

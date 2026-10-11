@@ -335,11 +335,60 @@ class TestDetectJsvmChallengeCaptchaPage:
     def test_captcha_page_by_title(self):
         assert detect_jsvm_challenge(self._CAPTCHA_HTML) is True
 
-    def test_captcha_page_by_sdk_script(self):
-        # title 被改动的情况下，captcha SDK 脚本路径兜底
-        html = '<html><script src="https://lf-cdn-tos.bytescm.com/obj/static/sec_sdk_build/3.5.2/captcha/index.js"></script></html>'
-        assert detect_jsvm_challenge(html) is True
+    def test_sdk_script_alone_is_not_captcha(self):
+        # 真实笔记页同样引用 sec_sdk captcha 脚本，只有路径不足以判定验证码页
+        # （2026-10 实测翻车：带 cookie 拿到完整页面仍被误判为验证码页）
+        html = '<html><title>正常笔记页</title><script src="https://lf-cdn-tos.bytescm.com/obj/static/sec_sdk_build/3.5.2/captcha/index.js"></script></html>'
+        assert detect_jsvm_challenge(html) is False
 
     def test_jsvm_challenge_still_detected(self):
         html = '<body></body><script>var glb;(glb=x)._$jsvmprt=function(){}</script>'
         assert detect_jsvm_challenge(html) is True
+
+
+class TestFetchPageCaptchaRetry:
+    """验证码中间页是概率性拦截，页面请求应退避重试而不是一次失败。（real: 4 次 1 次命中）"""
+
+    class _FakeResp:
+        def __init__(self, text, url="https://www.douyin.com/note/123"):
+            self.text = text
+            self.url = url
+            self.status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+    class _FakeSession:
+        def __init__(self, texts):
+            self._texts = list(texts)
+            self.calls = 0
+
+        def get(self, url, **kwargs):
+            self.calls += 1
+            text = self._texts.pop(0) if self._texts else "ok"
+            return TestFetchPageCaptchaRetry._FakeResp(text)
+
+        def close(self):
+            pass
+
+    _CAPTCHA = '<html><title>验证码中间页</title><script src="https://lf-cdn-tos.bytescm.com/obj/static/sec_sdk_build/3.5.2/captcha/index.js"></script></html>'
+
+    def test_captcha_retried_until_pass(self, monkeypatch):
+        import douyin_downloader as dd
+        monkeypatch.setattr("douyin_downloader.time.sleep", lambda s: None)
+        session = self._FakeSession([self._CAPTCHA, self._CAPTCHA, "正常页面 __pace_f 数据"])
+        monkeypatch.setattr("douyin_downloader.http_client.Session", lambda: session)
+        r = dd._fetch_page(session, "https://www.douyin.com/note/123", {})
+        assert r is not None
+        assert "__pace_f" in r.text
+        assert session.calls == 3
+
+    def test_captcha_exhausted_returns_last_response(self, monkeypatch):
+        # 重试用尽仍全命中：返回最后响应（由调用方给出限流提示），不返回 None
+        import douyin_downloader as dd
+        monkeypatch.setattr("douyin_downloader.time.sleep", lambda s: None)
+        session = self._FakeSession([self._CAPTCHA] * 5)
+        monkeypatch.setattr("douyin_downloader.http_client.Session", lambda: session)
+        r = dd._fetch_page(session, "https://www.douyin.com/note/123", {})
+        assert r is not None
+        assert "验证码中间页" in r.text
