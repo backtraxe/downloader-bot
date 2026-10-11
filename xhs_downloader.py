@@ -1,5 +1,3 @@
-import requests
-from requests.adapters import HTTPAdapter
 import glob
 import re
 import json
@@ -7,7 +5,9 @@ import os
 import time
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
 
+import http_client
 from sites import get_site_name, load_cookie_for_url
 from utils import (
     build_download_dir,
@@ -73,29 +73,14 @@ def _is_transient_error(err):
 
 
 def _build_session():
-    """构造带连接重试的 Session。
-    urllib3 层面配置 backoff_factor，使 DNS 解析失败、连接超时等
-    瞬时错误在底层自动重试，避免单次失败就抛出 Max retries exceeded。
+    """构造统一 HTTP Session：curl_cffi 可用走 TLS 伪装（chrome110 指纹），
+    不可用时降级系统 curl（http_client 内部处理）。
+
+    原 stdlib requests + urllib3 Retry 的组合在 TLS 指纹层一眼脚本（JA3），
+    迁移后与其他下载器同一链路。瞬时重试由调用点的上层循环负责
+    （_fetch_page / download_file 各自带退避重试）。
     """
-    session = requests.Session()
-    # urllib3.Retry 配置底层连接重试：
-    # total=5 最多重试 5 次，backoff_factor=1 使退避递增（0, 1, 2, 4, 8 秒）
-    # 仅对连接错误重试，不对已发送请求的读取错误重试（避免重复下载）
-    from urllib3.util.retry import Retry
-    retry = Retry(
-        total=5,
-        backoff_factor=1,
-        status_forcelist=[502, 503, 504],
-        allowed_methods=["GET", "HEAD"],
-    )
-    adapter = HTTPAdapter(
-        max_retries=retry,
-        pool_connections=10,
-        pool_maxsize=10,
-    )
-    session.mount("http://", adapter)
-    session.mount("https://", adapter)
-    return session
+    return http_client.Session()
 
 
 def download_file(session, url, filepath, headers, max_retries=5):
@@ -114,7 +99,8 @@ def download_file(session, url, filepath, headers, max_retries=5):
         try:
             # 引入 0.1 ~ 0.5 秒的随机延迟，防止并发过高被瞬间阻断连接
             time.sleep(random.uniform(0.1, 0.5))
-            r = session.get(url, headers=headers, stream=True, timeout=15)
+            r = session.get(url, headers=headers, stream=True, timeout=15,
+                            impersonate="chrome110")
             r.raise_for_status()
 
             # 从响应头推断真实扩展名，修正 filepath（避免 webp 存成 .jpg）
@@ -267,15 +253,22 @@ def extract_live_photo_stream(img):
 
 
 def detect_risk_control(html, response):
-    """检测小红书风控/验证码。综合文案 + 重定向 + 关键状态判定。"""
+    """检测小红书风控/验证码。综合文案 + 重定向 + 关键状态判定。
+
+    重定向信号只看域名与路径，不看 query——小红书 404 落地页的 query
+    会带 verifyMsg= 参数（error_code=300031 笔记无法浏览），全串子串匹配
+    会误报为风控页并掩盖真正的笔记不存在提示。
+    """
     if not html:
         return False
     # 文案兜底（文案可能变化，仅作辅助）
     if "验证码" in html or "访问过于频繁" in html:
         return True
-    # 重定向到验证/登录域
+    # 重定向到验证/登录域（仅按域名/路径判定，防 query 键名误伤）
     final_url = (response.url or "").lower() if response is not None else ""
-    if "verify" in final_url or "/login" in final_url or "captcha" in final_url:
+    parsed = urlparse(final_url)
+    url_hostpath = parsed.netloc + parsed.path
+    if "verify" in url_hostpath or "/login" in url_hostpath or "captcha" in url_hostpath:
         return True
     return False
 
@@ -309,7 +302,8 @@ def _fetch_page(session, url, headers, max_retries=5):
     last_err = None
     for attempt in range(1, max_retries + 1):
         try:
-            response = session.get(url, headers=headers, allow_redirects=True, timeout=15)
+            response = session.get(url, headers=headers, allow_redirects=True,
+                                   timeout=15, impersonate="chrome110")
             response.raise_for_status()
             return response
         except Exception as e:
@@ -464,6 +458,7 @@ def download_xhs_media(url, cookie):
         else:
             logger.info("未发现可下载的媒体文件，耗时 %.1f 秒。", time.time() - start_time)
 
+        session.close()
         logger.info("📁 保存目录: %s", os.path.abspath(base_path))
         logger.info("该链接处理完成，耗时 %.1f 秒。", time.time() - start_time)
 

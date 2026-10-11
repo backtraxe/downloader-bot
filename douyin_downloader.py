@@ -279,7 +279,8 @@ def download_file(session, url, filepath, headers, max_retries=5):
     for attempt in range(1, max_retries + 1):
         safe_path = None
         try:
-            time.sleep(random.uniform(0.1, 0.5))
+            # 与 1024 同一量级：0.5–1.5s 随机间隔，避免触发限流
+            time.sleep(random.uniform(0.5, 1.5))
             r = session.get(
                 url, headers=headers, timeout=15, impersonate="chrome110", stream=True)
             r.raise_for_status()

@@ -395,3 +395,31 @@ class TestTitleFallback:
     def test_title_with_special_chars_cleaned(self):
         # 含特殊字符但清洗后非空，保留
         assert self._safe_title("你好/世界") == "你好世界"
+
+
+class TestDetectRiskControlQueryKeyFalsePositive:
+    """小红书 404 落地页 query 带 verifyMsg= 参数（error_code=300031），
+    全串子串匹配会把笔记不存在误报为风控拦截。重定向信号仍按域名/路径生效。"""
+
+    def _resp(self, url):
+        return type("R", (), {"url": url})()
+
+    def test_404_page_with_verifymsg_query_not_risk_control(self):
+        url = (
+            "https://www.xiaohongshu.com/404?source=/404/sec_abc"
+            "?redirectPath=x&error_code=300031&verifyMsg="
+        )
+        html = "<html><title>小红书</title></html>"
+        assert detect_risk_control(html, self._resp(url)) is False
+
+    def test_verify_domain_still_detected(self):
+        url = "https://verify.xiaohongshu.com/web/verify?biz=web_profile"
+        assert detect_risk_control("<html>x</html>", self._resp(url)) is True
+
+    def test_verify_path_still_detected(self):
+        url = "https://www.xiaohongshu.com/sec/verify?biz=web_profile"
+        assert detect_risk_control("<html>x</html>", self._resp(url)) is True
+
+    def test_login_path_still_detected(self):
+        url = "https://www.xiaohongshu.com/login?redirect=xx"
+        assert detect_risk_control("<html>x</html>", self._resp(url)) is True
