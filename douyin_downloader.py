@@ -45,6 +45,13 @@ _NOTE_URL_RE = re.compile(r"https?://(?:www\.)?douyin\.com/note/(?P<id>\d+)")
 # jsvm 反爬挑战页特征：未登录/失效 Cookie 时返回空 body + VM 混淆脚本
 _JSVM_CHALLENGE_MARKER = "_$jsvmprt"
 
+# 验证码中间页特征：IP+Cookie 组合被限流时返回 sec_sdk captcha 页面
+# （真实案例：Termux 移动网络下高频请求同一链接触发，正文 6329 字节）
+_CAPTCHA_PAGE_MARKERS = ("验证码中间页", "sec_sdk_build", "/captcha/")
+
+# 所有"反爬拦截页"标记（任一命中即视为被拦截）
+_CHALLENGE_MARKERS = (_JSVM_CHALLENGE_MARKER, *_CAPTCHA_PAGE_MARKERS)
+
 
 def is_douyin_note_url(url):
     """判断 URL 是否为抖音图文笔记页（/note/<数字ID>）。"""
@@ -52,13 +59,17 @@ def is_douyin_note_url(url):
 
 
 def detect_jsvm_challenge(html):
-    """检测 jsvm 反爬挑战页。
+    """检测抖音反爬拦截页（jsvm 挑战页 / 验证码中间页）。
 
-    抖音对无有效登录态的请求返回一个正文为空、仅含 _$jsvmprt 混淆
-    脚本的挑战页——需要浏览器执行 JS 并算 __ac_signature 才能通过，
-    纯 HTTP 客户端无解。命中即判为 Cookie 缺失/失效。
+    两种已知形态：
+      1. jsvm 挑战页 —— 无登录态/指纹可疑时返回空 body + _$jsvmprt VM 混淆脚本
+      2. 验证码中间页 —— 高频/可疑 IP 触发限流时返回 sec_sdk captcha 页面
+         （正文仅 ~6KB，含 title=验证码中间页）
+    纯 HTTP 客户端都无法通过，命中即判为 Cookie/IP 侧问题。
     """
-    return bool(html) and _JSVM_CHALLENGE_MARKER in html
+    if not html:
+        return False
+    return any(marker in html for marker in _CHALLENGE_MARKERS)
 
 
 def get_headers(cookie):
@@ -333,13 +344,21 @@ def download_douyin_note(url, cookie):
 
     html = response.text
 
-    # jsvm 挑战页：无有效登录态，无法解析
+    # 反爬拦截页（jsvm 挑战 / 验证码中间页）：纯 HTTP 无法通过
     if detect_jsvm_challenge(html):
-        logger.error(
-            "提取失败：抖音返回了反爬挑战页，说明 Cookie 缺失或已失效。"
-            "请在 cookies/douyin.txt 中填入有效的登录态 Cookie 后重试。（耗时 %.1f 秒）",
-            time.time() - start_time,
-        )
+        if any(m in html for m in _CAPTCHA_PAGE_MARKERS):
+            logger.error(
+                "提取失败：触发抖音验证码中间页——通常是同 IP 高频请求或该网络"
+                "被限流。建议：① 换个网络（如蜂窝 ↔ Wi-Fi）；② 等 10–30 分钟后再试；"
+                "③ 确认 cookies/douyin.txt 是有效登录态。（耗时 %.1f 秒）",
+                time.time() - start_time,
+            )
+        else:
+            logger.error(
+                "提取失败：抖音返回了反爬挑战页，说明 Cookie 缺失或已失效。"
+                "请在 cookies/douyin.txt 中填入有效的登录态 Cookie 后重试。（耗时 %.1f 秒）",
+                time.time() - start_time,
+            )
         return
 
     detail = extract_note_detail(html)

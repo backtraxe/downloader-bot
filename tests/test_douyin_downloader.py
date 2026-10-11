@@ -320,3 +320,26 @@ class TestResolveDouyinBasename:
         base = resolve_douyin_basename(detail)
         for ch in '\\/*?:"<>|':
             assert ch not in base
+
+
+class TestDetectJsvmChallengeCaptchaPage:
+    """真实 Termux 样本：6329 字节验证码中间页（IP+Cookie 被限流触发）。"""
+
+    _CAPTCHA_HTML = """<html>
+<head>
+<meta charset="utf-8">
+<title>验证码中间页</title>
+<script charset="utf-8" nonce="argus-csp-token" src="https://lf-cdn-tos.bytescm.com/obj/static/sec_sdk_build/3.5.2/captcha/index.js"></script>
+</head><body></body></html>"""
+
+    def test_captcha_page_by_title(self):
+        assert detect_jsvm_challenge(self._CAPTCHA_HTML) is True
+
+    def test_captcha_page_by_sdk_script(self):
+        # title 被改动的情况下，captcha SDK 脚本路径兜底
+        html = '<html><script src="https://lf-cdn-tos.bytescm.com/obj/static/sec_sdk_build/3.5.2/captcha/index.js"></script></html>'
+        assert detect_jsvm_challenge(html) is True
+
+    def test_jsvm_challenge_still_detected(self):
+        html = '<body></body><script>var glb;(glb=x)._$jsvmprt=function(){}</script>'
+        assert detect_jsvm_challenge(html) is True
