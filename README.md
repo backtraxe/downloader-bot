@@ -59,7 +59,7 @@ python live_photo.py "download/xiaohongshu/<作者>/<标题>_<noteId>"
 
 - 抖音图文笔记（`douyin.com/note/<id>`，App 分享文案常见）yt-dlp 不支持，由 `douyin_downloader.py` 手写解析：带登录 Cookie 请求笔记页，从内嵌的 `RENDER_DATA`（或 `_ROUTER_DATA`）JSON 中提取图片列表与视频
 - **必须填有效登录态 Cookie** 到 `cookies/douyin.txt`：无 Cookie 时抖音返回 jsvm 反爬挑战页，脚本会识别并提示；Netscape 格式和浏览器复制的 `Cookie:` 请求头整段都能吃（脚本自动识别转换），与 yt-dlp 侧共用同一个文件
-- 图片默认下载**无水印原尺寸版**（自动避开 `dy-water` 水印流水线，选 `aweme-images` 展示端）；输出 `download/douyin/[<作者>/]<标题>_<awemeId>/`，图片按 `001.jpg` 序号命名，实况图视频同序号配对 `001.mp4`，笔记级视频为 `video.mp4`
+- 图片默认下载**无水印最高档**（避开 `dy-water` 水印流水线，同档 q75 中 jpeg 优先）；与网页端浏览完全同源；输出 `download/douyin/[<作者>/]<标题>_<awemeId>/`，图片按 `001.jpg` 序号命名，实况图视频同序号配对 `001.mp4`，笔记级视频为 `video.mp4`
 - 抖音视频链接（`/video/<id>`）不受影响，仍走 yt-dlp
 
 #### 通用网页后端

@@ -193,12 +193,14 @@ _WATERMARK_PATTERN = "dy-water"
 
 
 def extract_douyin_image_url(img):
-    """从单张图片对象取直链，优先无水印版。
+    """从单张图片对象取直链，优先无水印最高档。
 
     URL 两族都在（downloadUrlList/urlList，兼容老 snake_case），但
     downloadUrlList 实际是 ~tplv-dy-water-* 水印流水线，urlList 才是
-    ~tplv-dy-aweme-images:* 无水印原尺寸版；含 dy-water 的条目一律跳过，
-    无水印候选中 downloadUrlList 优先于 urlList（画质上限更高）。
+    ~tplv-dy-aweme-images:* 无水印版；含 dy-water 的条目一律跳过。
+    无水印候选中同档位（q75）下 jpeg 优先于 webp——同一变换源的 jpeg 是
+    更通用的无损读出格式（体积更大但兼容性和保真上限最好）；同格式时
+    downloadUrlList 优先于 urlList。
     全部都含水印时才退回首个合法 URL（宁可带水印也不漏图）。
     """
     img = img or {}
@@ -210,7 +212,15 @@ def extract_douyin_image_url(img):
              if isinstance(u, str) and u.startswith(("http://", "https://", "//"))]
     if not valid:
         return None
+
+    def _is_jpeg(u):
+        path = u.split("?")[0].lower()
+        return ".jpeg" in path or ".jpg" in path
+
     no_watermark = [u for u in valid if _WATERMARK_PATTERN not in u]
+    for u in no_watermark:
+        if _is_jpeg(u):
+            return u
     return no_watermark[0] if no_watermark else valid[0]
 
 

@@ -399,10 +399,21 @@ class TestExtractDouyinImageUrlWatermarkFilter:
 
     def test_watermark_variant_skipped(self):
         img = {
-            "downloadUrlList": ["https://p3-sign.example.com/x~tplv-dy-water-v2:abc"],
-            "urlList": ["https://p3-sign.example.com/x~tplv-dy-aweme-images:q75"],
+            "downloadUrlList": ["https://p3-sign.example.com/x~tplv-dy-water-v2:abc.webp"],
+            "urlList": ["https://p3-sign.example.com/x~tplv-dy-aweme-images:q75.webp"],
         }
-        assert extract_douyin_image_url(img) == "https://p3-sign.example.com/x~tplv-dy-aweme-images:q75"
+        assert extract_douyin_image_url(img) == "https://p3-sign.example.com/x~tplv-dy-aweme-images:q75.webp"
+
+    def test_jpeg_preferred_over_webp_when_same_quality_tier(self):
+        # 真实页面的无水印端是 q75.webp + q75.jpeg 同档双格式——jpeg 保真上限更高
+        img = {
+            "downloadUrlList": ["https://x.example.com/a~tplv-dy-water-v2:a.webp"],
+            "urlList": [
+                "https://x.example.com/a~tplv-dy-aweme-images:q75.webp",
+                "https://x.example.com/a~tplv-dy-aweme-images:q75.jpeg",
+            ],
+        }
+        assert extract_douyin_image_url(img) == "https://x.example.com/a~tplv-dy-aweme-images:q75.jpeg"
 
     def test_all_watermark_falls_back_to_first(self):
         # 全是水印版时宁可用水印版也不能没图
