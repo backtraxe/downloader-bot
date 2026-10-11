@@ -392,3 +392,25 @@ class TestFetchPageCaptchaRetry:
         r = dd._fetch_page(session, "https://www.douyin.com/note/123", {})
         assert r is not None
         assert "验证码中间页" in r.text
+
+
+class TestExtractDouyinImageUrlWatermarkFilter:
+    """downloadUrlList 在真实页面是 ~tplv-dy-water-* 水印端，urlList 才是无水印端。"""
+
+    def test_watermark_variant_skipped(self):
+        img = {
+            "downloadUrlList": ["https://p3-sign.example.com/x~tplv-dy-water-v2:abc"],
+            "urlList": ["https://p3-sign.example.com/x~tplv-dy-aweme-images:q75"],
+        }
+        assert extract_douyin_image_url(img) == "https://p3-sign.example.com/x~tplv-dy-aweme-images:q75"
+
+    def test_all_watermark_falls_back_to_first(self):
+        # 全是水印版时宁可用水印版也不能没图
+        img = {"urlList": ["https://x.example.com/a~tplv-dy-water-v2:a"]}
+        assert extract_douyin_image_url(img) == "https://x.example.com/a~tplv-dy-water-v2:a"
+
+    def test_only_download_list_watermark_filtered(self):
+        img = {"downloadUrlList": ["https://x.example.com/a~tplv-dy-water-v2:a"],
+               "urlList": []}
+        # 有水印 fallback 仍然存在
+        assert extract_douyin_image_url(img) == "https://x.example.com/a~tplv-dy-water-v2:a"

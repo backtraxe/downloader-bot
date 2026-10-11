@@ -186,16 +186,32 @@ def extract_aweme_detail(data):
     return None
 
 
+# 抖音图片 CDN 的水印流水线标识：URL 里带 ~tplv-dy-water-* 即水印版。
+# 图片对象上 downloadUrlList 通配的是该水印版（所谓"下载端"），
+# urlList 的 aweme-images 展示端反而是无水印高清版，故按水印标记过滤选择
+_WATERMARK_PATTERN = "dy-water"
+
+
 def extract_douyin_image_url(img):
-    """从单张图片对象取直链。download 版（原图直链）优先于 url 列表。
-    新字段名 camelCase（downloadUrlList/urlList），老字段名 snake_case，双 key 兼容。"""
+    """从单张图片对象取直链，优先无水印版。
+
+    URL 两族都在（downloadUrlList/urlList，兼容老 snake_case），但
+    downloadUrlList 实际是 ~tplv-dy-water-* 水印流水线，urlList 才是
+    ~tplv-dy-aweme-images:* 无水印原尺寸版；含 dy-water 的条目一律跳过，
+    无水印候选中 downloadUrlList 优先于 urlList（画质上限更高）。
+    全部都含水印时才退回首个合法 URL（宁可带水印也不漏图）。
+    """
     img = img or {}
-    for key in ("downloadUrlList", "download_url_list", "urlList", "url_list"):
-        urls = img.get(key) or []
-        for u in urls:
-            if u and isinstance(u, str) and u.startswith(("http://", "https://", "//")):
-                return u
-    return None
+    ordered = []
+    for camel, snake in (("downloadUrlList", "download_url_list"),
+                         ("urlList", "url_list")):
+        ordered.extend(img.get(camel) or img.get(snake) or [])
+    valid = [u for u in ordered
+             if isinstance(u, str) and u.startswith(("http://", "https://", "//"))]
+    if not valid:
+        return None
+    no_watermark = [u for u in valid if _WATERMARK_PATTERN not in u]
+    return no_watermark[0] if no_watermark else valid[0]
 
 
 def _first_play_url(video_subtree):
