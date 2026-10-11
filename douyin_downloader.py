@@ -344,10 +344,13 @@ def download_douyin_note(url, cookie):
 
     detail = extract_note_detail(html)
     if detail is None:
+        # 排查辅助：带状态码/正文长度/落地 URL，便于区分空响应、登录引导页、结构变更
         logger.error(
             "未在页面数据中定位到笔记详情（RENDER_DATA/pace_f 均无 aweme detail）。"
-            "可能是页面结构已更新或 Cookie 失效。（耗时 %.1f 秒）",
-            time.time() - start_time,
+            "可能是页面结构已更新或 Cookie 失效"
+            "（状态 %s，正文 %d 字节，落地 %s，耗时 %.1f 秒）",
+            getattr(response, "status_code", "?"), len(html),
+            getattr(response, "url", "?"), time.time() - start_time,
         )
         return
 

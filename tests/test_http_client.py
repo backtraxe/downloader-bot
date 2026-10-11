@@ -59,10 +59,11 @@ class TestCurlResponse:
 class TestParseResponseBlocks:
     def test_single_block(self):
         raw = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\nhello"
-        status, headers, body = _parse_response_blocks(raw)
+        status, headers, body, effective_url = _parse_response_blocks(raw, "http://x/a")
         assert status == 200
         assert headers["content-type"] == "text/html"
         assert body == b"hello"
+        assert effective_url == ""
 
     def test_redirect_chain_keeps_last_block(self):
         # -L 跟随后输出多块响应头：301 块 + 200 块，应取最后一块的状态与头
@@ -70,14 +71,27 @@ class TestParseResponseBlocks:
             b"HTTP/1.1 301 Moved\r\nLocation: http://x/b\r\nContent-Length: 0\r\n\r\n"
             b"HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\n\r\nJPEGDATA"
         )
-        status, headers, body = _parse_response_blocks(raw)
+        status, headers, body, effective_url = _parse_response_blocks(raw, "http://x/a")
         assert status == 200
         assert headers.get("content-type") == "image/jpeg"
         assert body == b"JPEGDATA"
 
+    def test_redirect_chain_tracks_effective_url(self):
+        # 多单跳重定向：Location 逐跳 urljoin 汇总为最终 URL
+        # （短链展开 resolve_short_link 依赖此值，丢失会让短链直接落到 yt-dlp）
+        raw = (
+            b"HTTP/1.1 302 Found\r\nLocation: /step1\r\nContent-Length: 0\r\n\r\n"
+            b"HTTP/1.1 302 Found\r\nLocation: https://www.douyin.com/note/123?t=1\r\nContent-Length: 0\r\n\r\n"
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\nBODY"
+        )
+        status, headers, body, effective_url = _parse_response_blocks(raw, "https://v.douyin.com/abc")
+        assert status == 200
+        assert effective_url == "https://www.douyin.com/note/123?t=1"
+
     def test_no_separator(self):
-        status, headers, body = _parse_response_blocks(b"garbage")
+        status, headers, body, effective_url = _parse_response_blocks(b"garbage")
         assert body == b"garbage"
+        assert effective_url == ""
 
 
 # ---------------- _build_curl_args ----------------

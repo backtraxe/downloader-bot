@@ -12,6 +12,7 @@ import logging
 import re
 import shutil
 import subprocess
+from urllib.parse import urljoin
 
 logger = logging.getLogger("downloader")
 
@@ -61,18 +62,24 @@ class CurlResponse:
         return json.loads(self._body)
 
 
-def _parse_response_blocks(raw):
-    """解析 `curl -D -` 的输出，返回 (status_code, headers, body)。
+def _parse_response_blocks(raw, base_url=""):
+    """解析 `curl -D -` 的输出，返回 (status_code, headers, body, effective_url)。
 
     开启 -L 跟随后，stdout 会串联多个响应头块（每次重定向一块），
-    这里循环剥掉中间块，取最后一个块的状态行与响应头。"""
+    这里循环剥掉中间块，取最后一个块的状态行与响应头。
+
+    effective_url 是逐跳累积的最终 URL：3xx 块的 Location 经 urljoin 汇总。
+    curl_cffi 的 response.url 在降级路径里等价物——短链展开（resolve_short_link）
+    依赖它判断重定向目标，丢失会导致展开静默 no-op 把短链直接交给 yt-dlp。
+    """
+    effective_url = ""
     while True:
         for sep in (b"\r\n\r\n", b"\n\n"):
             idx = raw.find(sep)
             if idx != -1:
                 break
         if idx == -1:
-            return 200, {}, raw
+            return 200, {}, raw, effective_url
 
         header_bytes, rest = raw[:idx], raw[idx + len(sep):]
         header_text = header_bytes.decode("utf-8", errors="replace")
@@ -96,9 +103,12 @@ def _parse_response_blocks(raw):
 
         # 3xx 块只有头和空 body，后面紧跟下一跳的响应头块
         if 300 <= status_code < 400 and rest:
+            location = resp_headers.get("location")
+            if location:
+                effective_url = urljoin(effective_url or base_url, location)
             raw = rest
             continue
-        return status_code, resp_headers, rest
+        return status_code, resp_headers, rest, effective_url
 
 
 def _build_curl_args(url, method, headers, timeout, impersonate, stream, extra_flags=None):
@@ -132,8 +142,8 @@ def _curl_request(url, method="GET", headers=None, timeout=15, impersonate=None,
         raise Exception(f"curl 失败（返回码 {proc.returncode}）：{stderr}")
 
     raw = proc.stdout
-    status_code, resp_headers, body = _parse_response_blocks(raw)
-    return CurlResponse(status_code, resp_headers, body, url)
+    status_code, resp_headers, body, effective_url = _parse_response_blocks(raw, url)
+    return CurlResponse(status_code, resp_headers, body, effective_url or url)
 
 
 class Session:

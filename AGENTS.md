@@ -31,11 +31,11 @@ download/            # 输出目录，download/<站点>[/<作者>]/<标题>[_<ID
 python -m venv .venv && source .venv/bin/activate   # 可选但推荐
 pip install -r requirements.txt
 pip install pytest
-python -m pytest -q                                  # 323 个单元测试，全部离线
+python -m pytest -q                                  # 324 个单元测试，全部离线
 python downloader.py                                 # 统一入口，按 URL 自动路由
 ```
 
-注意：裸 `pytest -q` 在没有 conftest.py 的情况下不会把项目根加入 `sys.path`，会因 `ModuleNotFoundError` 收集失败；统一用 `python -m pytest -q`（或补充 conftest.py）。当前 323 个测试全部通过（已验证）。
+注意：裸 `pytest -q` 在没有 conftest.py 的情况下不会把项目根加入 `sys.path`，会因 `ModuleNotFoundError` 收集失败；统一用 `python -m pytest -q`（或补充 conftest.py）。当前 324 个测试全部通过（已验证）。
 
 ## 下载器架构
 
@@ -60,7 +60,7 @@ python downloader.py                                 # 统一入口，按 URL �
 
 **`1024_downloader.py`（通用静态抓取）。** 用 `curl_cffi` 的 `impersonate="chrome110"` 做 TLS 指纹伪装绕过防盗链/CDN。页面请求经 `fetch_page` 封装：`429` 限流、所有 `5xx`（含腾讯云 EdgeOne WAF 的非标拦截码 `567`，酷安等站点会间歇返回"请求已被站点的安全策略拦截"页）及网络异常按指数退避重试至多 3 次（`_is_block_status` 判定），`4xx` 确定性错误立即放弃。深扫 `<img>/<source>/<video>` 的懒加载属性（`data-src`、`data-original`、`ess-data` 等）、`<a href>` 直链、行内 `style` 的 `url()` 背景图。装饰资源过滤：扫描阶段（`collect_media_urls._add`）按原始 URL 文件名命中 `_DECORATIVE_KEYWORDS`（logo/avatar/qrcode/emotion/beian/icon 等）剔除——必须在此时做，落盘会被序号重命名为 `001.<ext>`，下载阶段已拿不到原始关键词；下载后按宽高过滤——`utils.get_image_dimensions` 用 Pillow 解析图片宽高（解析失败返回 None），短边 < `MIN_IMAGE_DIMENSION`（300px）判为装饰图删除，尺寸解析失败回退体积阈值 `MIN_IMAGE_BYTES`（20KB）；视频不过滤（短视频也可能很小）。下载时 `Referer` 设为页面 URL（破解防盗链的关键），拦截到 HTML 响应（被风控）直接判失败，扩展名按 URL + Content-Type 校正（`guess_extension`）。`ThreadPoolExecutor(max_workers=5)` 并发，请求间 0.5–1.5s 随机延迟防封 IP。媒体扫描由 `collect_media_urls` 按 DOM 顺序保序去重；落盘按 `build_media_tasks` 序号命名 `001.<ext>`（目录名已带标题与 ID，文件本体只要序号；与小红书同风格，目录内按序号还原帖内次序），不再保留远端乱序哈希名。作者经 `extract_page_author` 两级提取：DOM 选择器（酷安 `.username-item`）优先，`<title>` 的"正文 来自 作者 - 站点"后缀模式兜底；命中时标题剥离作者尾巴（避免目录名重复），未命中返回空串自然退化为无作者层。输出 `download/<站点>[/<作者>/]<标题>[_<数字ID>]/`——URL 末段含 ≥5 位数字 ID 时经 `utils.extract_url_numeric_id` 追加后缀（`make_page_dir_name`），同标题可区分、目录可溯源。
 
-**`http_client.py`（HTTP 统一封装）。** 提供 `Session` 和模块级 `get()`。curl_cffi 可用时委托给它；不可用时（Termux 上编译扩展常因 Python ABI 不匹配加载失败）降级为系统 `curl` 命令（subprocess），返回兼容 requests 接口的 `CurlResponse`（`text`/`headers`/`iter_content`/`raise_for_status`/`json`）。系统 curl 不做 JA3 伪装，只加 `--http2`（硬编码 cipher/curve 反而会 TLS 握手失败）。被 `1024_downloader` 和 `downloader.py` 的短链展开共用。
+**`http_client.py`（HTTP 统一封装）。** 提供 `Session` 和模块级 `get()`。curl_cffi 可用时委托给它；不可用时（Termux 上编译扩展常因 Python ABI 不匹配加载失败）降级为系统 `curl` 命令（subprocess），返回兼容 requests 接口的 `CurlResponse`（`text`/`headers`/`iter_content`/`raise_for_status`/`json`）。系统 curl 不做 JA3 伪装，只加 `--http2`（硬编码 cipher/curve 反而会 TLS 握手失败）。被 `1024_downloader` 和 `downloader.py` 的短链展开共用。降级路径用 `curl -L` 跟随重定向时，`_parse_response_blocks` 逐跳累积中间块的 Location 保存为 `CurlResponse.url`（effective_url）——丢失它会让 `resolve_short_link` 永远判断"无重定向"、重试全徒劳，Termux 上的真实故障（已修）。
 
 **`utils.py`（共用工具）。** `setup_logging`（幂等）、`init_useragent`（fake_useragent 随机 UA，多采样探测不可用时降级固定 Chrome UA）、`extract_urls`（从粘贴的分享文案中提取 URL，剔除尾部中文/标点）、`sanitize_filename`、`build_download_dir`（作者非空才加层，防御目录穿越）、`unique_path`（`O_CREAT|O_EXCL` 原子占位去重，并发不撞名）、`guess_extension`、`normalize_url`、`is_html_content`、`normalize_xhs_state_json`、`cookie_header_to_netscape`（把 `Cookie:` 请求头字符串转成 yt-dlp 可读的 Netscape 文件）、`cookie_text_to_header`（逆操作：Netscape 文件/请求头整段统一转回 `Cookie:` 头，douyin_downloader 用）。
 
@@ -79,7 +79,7 @@ python downloader.py                                 # 统一入口，按 URL �
 
 ## 测试
 
-pytest 是唯一框架，323 个测试全部离线（不联网）。测试位于 `tests/test_<模块>.py`，只覆盖纯函数：`get_site_name`、`resolve_uploader`、`build_ydl_opts`、`dispatch_url`（含 douyin /note/ 路由）、`diagnose_error`、`resolve_short_link`、`detect_risk_control`、`detect_note_not_found`、`extract_xhs_author`、`extract_image_url`、`extract_video_url`（含多画质流选择）、`ensure_https`、`_is_transient_error`、`_is_block_status`、`fetch_page`、`_is_decorative_name`、`download_file`（注入假 session）、`get_image_dimensions`（Pillow 生成真实图片）、`extract_url_numeric_id`、`make_page_dir_name`、`collect_media_urls`（构造 HTML 字符串）、`build_media_tasks`、`detect_jsvm_challenge`、`parse_render_data`/`extract_aweme_detail`/`extract_douyin_image_url`/`extract_douyin_author`/`resolve_douyin_basename`（构造 RENDER_DATA 页面 fixture）、sanitize/build_download_dir/unique_path/cookie_header_to_netscape/cookie_text_to_header 等。新增 URL 或解析分支时按 `tests/test_sites.py` 的方式用参数化用例；新的公共函数应附带测试。提交前跑 `python -m pytest -q`。
+pytest 是唯一框架，324 个测试全部离线（不联网）。测试位于 `tests/test_<模块>.py`，只覆盖纯函数：`get_site_name`、`resolve_uploader`、`build_ydl_opts`、`dispatch_url`（含 douyin /note/ 路由）、`diagnose_error`、`resolve_short_link`、`detect_risk_control`、`detect_note_not_found`、`extract_xhs_author`、`extract_image_url`、`extract_video_url`（含多画质流选择）、`ensure_https`、`_is_transient_error`、`_is_block_status`、`fetch_page`、`_is_decorative_name`、`download_file`（注入假 session）、`get_image_dimensions`（Pillow 生成真实图片）、`extract_url_numeric_id`、`make_page_dir_name`、`collect_media_urls`（构造 HTML 字符串）、`build_media_tasks`、`detect_jsvm_challenge`、`parse_render_data`/`extract_aweme_detail`/`extract_douyin_image_url`/`extract_douyin_author`/`resolve_douyin_basename`（构造 RENDER_DATA 页面 fixture）、sanitize/build_download_dir/unique_path/cookie_header_to_netscape/cookie_text_to_header 等。新增 URL 或解析分支时按 `tests/test_sites.py` 的方式用参数化用例；新的公共函数应附带测试。提交前跑 `python -m pytest -q`。
 
 ## Cookie 与安全
 
