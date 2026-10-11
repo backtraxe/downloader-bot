@@ -199,6 +199,28 @@ def diagnose_error(err_msg):
 _YTDLP_SITES = frozenset(SITE_REQUIRE_COOKIE.keys()) - {"xiaohongshu"}
 
 
+def resolve_short_link_with_retry(url, attempts=3):
+    """resolve_short_link 的带重试版本。
+
+    v.douyin.com 等短链偶发不返回 302 而是 200 页面（服务端反爬的不一致行为），
+    此时 resolve_short_link 静默原样返回；重试几次拿到 302 后再供路由判断。
+    （真实案例：同一短链 21:19 连续两次无重定向 → yt-dlp 跟到 /note/ 报
+    Unsupported URL，21:30 同链接正常 302。）
+    """
+    domain = urlparse(url).netloc.lower()
+    if domain not in _SHORT_LINK_DOMAINS:
+        return url
+    for i in range(attempts):
+        resolved = resolve_short_link(url)
+        if resolved != url:
+            return resolved
+        if i + 1 < attempts:
+            logger.warning("短链未展开（第 %d/%d 次），%.1fs 后重试: %s",
+                           i + 1, attempts, 1.5 * (i + 1), url)
+            time.sleep(1.5 * (i + 1) + random.uniform(0, 0.5))
+    return url
+
+
 def dispatch_url(url):
     """统一入口：按站点自动分发到对应下载器。
 
@@ -221,10 +243,11 @@ def dispatch_url(url):
 
     if site_name == "douyin":
         # 抖音图文笔记（/note/）yt-dlp 不支持，走手写解析；
-        # 短链先展开才能判断目标类型（/note/ 手写解析，/video/ 走 yt-dlp）
+        # 短链先展开才能判断目标类型（/note/ 手写解析，/video/ 走 yt-dlp）。
+        # 展开偶发无重定向（服务端反爬不一致），带重试
         from douyin_downloader import download_douyin_note, is_douyin_note_url
 
-        resolved = resolve_short_link(url)
+        resolved = resolve_short_link_with_retry(url)
         if is_douyin_note_url(resolved):
             from sites import load_cookie_for_url
 
@@ -262,8 +285,8 @@ def download_url(url):
                            site_name, site_name)
 
     # 短链（b23.tv / v.douyin.com 等）先展开为最终 URL，
-    # 避免 yt-dlp 在 DNS 解析阶段就失败
-    resolved = resolve_short_link(url)
+    # 避免 yt-dlp 在 DNS 解析阶段就失败；短链服务端偶发无重定向，带重试
+    resolved = resolve_short_link_with_retry(url)
     if resolved == url and urlparse(url).netloc.lower() in _SHORT_LINK_DOMAINS:
         logger.warning("⚠️ 短链展开失败，yt-dlp 可能因 DNS 解析报错: %s", url)
     url = resolved

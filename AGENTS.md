@@ -31,11 +31,11 @@ download/            # 输出目录，download/<站点>[/<作者>]/<标题>[_<ID
 python -m venv .venv && source .venv/bin/activate   # 可选但推荐
 pip install -r requirements.txt
 pip install pytest
-python -m pytest -q                                  # 304 个单元测试，全部离线
+python -m pytest -q                                  # 319 个单元测试，全部离线
 python downloader.py                                 # 统一入口，按 URL 自动路由
 ```
 
-注意：裸 `pytest -q` 在没有 conftest.py 的情况下不会把项目根加入 `sys.path`，会因 `ModuleNotFoundError` 收集失败；统一用 `python -m pytest -q`（或补充 conftest.py）。当前 304 个测试全部通过（已验证）。
+注意：裸 `pytest -q` 在没有 conftest.py 的情况下不会把项目根加入 `sys.path`，会因 `ModuleNotFoundError` 收集失败；统一用 `python -m pytest -q`（或补充 conftest.py）。当前 319 个测试全部通过（已验证）。
 
 ## 下载器架构
 
@@ -48,7 +48,7 @@ python downloader.py                                 # 统一入口，按 URL �
 | bilibili / douyin 视频 / youtube / instagram / twitter | `download_url` → yt-dlp |
 | 其余任意站点 | `1024_downloader.extract_general_media`（通用静态抓取） |
 
-注意：douyin 必须先 `resolve_short_link` 展开短链（v.douyin.com）才能判断目标是 /note/（手写解析）还是 /video/（yt-dlp）——yt-dlp 的 DouyinIE 只认 /video/，图文笔记交它会报 `Unsupported URL`。
+注意：douyin 必须先 `resolve_short_link` 展开短链（v.douyin.com）才能判断目标是 /note/（手写解析）还是 /video/（yt-dlp）——yt-dlp 的 DouyinIE 只认 /video/，图文笔记交它会报 `Unsupported URL`。短链服务端偶发不返回 302 而是 200（反爬不一致，实测发生过），因此路由和 download_url 都用 `resolve_short_link_with_retry`（无变化时退避重试至多 3 次）而不是单次 `resolve_short_link`。
 
 **`downloader.py`（yt-dlp 后端）。** `download_url` 采用两段式：先 `extract_info(download=False)` 探一次拿作者（`resolve_uploader` 取 `uploader` 并 `sanitize_filename` 清洗），再 `build_ydl_opts(site, author=...)` 构造选项后真正下载。代价是多一次请求；收益是作者缺失时自然退化为无作者层，不产生 `NA/` 或 `unknown/` 占位目录。cookiefile 仅当 `cookies/<site>.txt` 存在且非空时才传入。短链（`b23.tv`/`v.douyin.com`/`youtu.be`/`t.co`/`instagr.am`/`xhslink.com`）先经 `resolve_short_link` 用 http_client 展开为最终 URL——yt-dlp 走 Python socket 做 DNS，部分环境（沙箱、Termux）对短链域名解析失败，curl 自带解析器正常。yt-dlp 保持静默（`quiet`/`noprogress`），进度经 `progress_hooks` 转 logging。瞬时网络错误（SSL EOF、连接重置、超时、DNS 失败、502/503）由 `diagnose_error` 识别后整链退避重试最多 3 次；登录类错误翻译成"需登录 / Cookie 失效"提示。**新增站点首选这个入口**——yt-dlp 已覆盖上千站点，通常只需在 `sites.py` 加映射。
 
@@ -79,7 +79,7 @@ python downloader.py                                 # 统一入口，按 URL �
 
 ## 测试
 
-pytest 是唯一框架，304 个测试全部离线（不联网）。测试位于 `tests/test_<模块>.py`，只覆盖纯函数：`get_site_name`、`resolve_uploader`、`build_ydl_opts`、`dispatch_url`（含 douyin /note/ 路由）、`diagnose_error`、`resolve_short_link`、`detect_risk_control`、`detect_note_not_found`、`extract_xhs_author`、`extract_image_url`、`extract_video_url`（含多画质流选择）、`ensure_https`、`_is_transient_error`、`_is_block_status`、`fetch_page`、`_is_decorative_name`、`download_file`（注入假 session）、`get_image_dimensions`（Pillow 生成真实图片）、`extract_url_numeric_id`、`make_page_dir_name`、`collect_media_urls`（构造 HTML 字符串）、`build_media_tasks`、`detect_jsvm_challenge`、`parse_render_data`/`extract_aweme_detail`/`extract_douyin_image_url`/`extract_douyin_author`/`resolve_douyin_basename`（构造 RENDER_DATA 页面 fixture）、sanitize/build_download_dir/unique_path/cookie_header_to_netscape/cookie_text_to_header 等。新增 URL 或解析分支时按 `tests/test_sites.py` 的方式用参数化用例；新的公共函数应附带测试。提交前跑 `python -m pytest -q`。
+pytest 是唯一框架，319 个测试全部离线（不联网）。测试位于 `tests/test_<模块>.py`，只覆盖纯函数：`get_site_name`、`resolve_uploader`、`build_ydl_opts`、`dispatch_url`（含 douyin /note/ 路由）、`diagnose_error`、`resolve_short_link`、`detect_risk_control`、`detect_note_not_found`、`extract_xhs_author`、`extract_image_url`、`extract_video_url`（含多画质流选择）、`ensure_https`、`_is_transient_error`、`_is_block_status`、`fetch_page`、`_is_decorative_name`、`download_file`（注入假 session）、`get_image_dimensions`（Pillow 生成真实图片）、`extract_url_numeric_id`、`make_page_dir_name`、`collect_media_urls`（构造 HTML 字符串）、`build_media_tasks`、`detect_jsvm_challenge`、`parse_render_data`/`extract_aweme_detail`/`extract_douyin_image_url`/`extract_douyin_author`/`resolve_douyin_basename`（构造 RENDER_DATA 页面 fixture）、sanitize/build_download_dir/unique_path/cookie_header_to_netscape/cookie_text_to_header 等。新增 URL 或解析分支时按 `tests/test_sites.py` 的方式用参数化用例；新的公共函数应附带测试。提交前跑 `python -m pytest -q`。
 
 ## Cookie 与安全
 

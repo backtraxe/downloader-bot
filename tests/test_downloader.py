@@ -250,3 +250,43 @@ class TestDispatchDouyinNoteRouting:
         downloader.dispatch_url("https://www.douyin.com/video/7666381907030529443")
         assert note_calls == []
         assert ytdlp_calls == ["https://www.douyin.com/video/7666381907030529443"]
+
+
+class TestResolveShortLinkWithRetry:
+    """v.douyin.com 偶发返回 200 而非 302，展开需带重试（21:19 案例）。"""
+
+    def test_retries_until_expanded(self, monkeypatch):
+        from downloader import resolve_short_link_with_retry
+
+        calls = iter([
+            "https://v.douyin.com/abc/",                      # 第 1 次无重定向
+            "https://v.douyin.com/abc/",                      # 第 2 次仍无
+            "https://www.douyin.com/note/123",                # 第 3 次成功
+        ])
+        monkeypatch.setattr("downloader.resolve_short_link", lambda u: next(calls))
+        monkeypatch.setattr("downloader.time.sleep", lambda s: None)
+        out = resolve_short_link_with_retry("https://v.douyin.com/abc/")
+        assert out == "https://www.douyin.com/note/123"
+
+    def test_gives_up_after_max_attempts(self, monkeypatch):
+        from downloader import resolve_short_link_with_retry
+
+        calls = []
+        def fake_resolve(u):
+            calls.append(u)
+            return u
+        monkeypatch.setattr("downloader.resolve_short_link", fake_resolve)
+        monkeypatch.setattr("downloader.time.sleep", lambda s: None)
+        out = resolve_short_link_with_retry("https://v.douyin.com/abc/")
+        # 当作未处理 URL 原样返回（由调用方降级）
+        assert out == "https://v.douyin.com/abc/"
+        assert len(calls) == 3
+
+    def test_non_short_link_no_request(self, monkeypatch):
+        from downloader import resolve_short_link_with_retry
+
+        calls = []
+        monkeypatch.setattr("downloader.resolve_short_link", lambda u: calls.append(u) or u)
+        out = resolve_short_link_with_retry("https://www.douyin.com/note/123")
+        assert out == "https://www.douyin.com/note/123"
+        assert calls == []
