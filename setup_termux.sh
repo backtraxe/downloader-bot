@@ -96,6 +96,21 @@ info "基础工具已安装"
 info "安装 python-pillow（Termux 预编译版，勿用 pip）"
 pkg install -y python-pillow
 
+# curl_cffi 跨 Python 大版本升级会 ABI 失配：
+# 旧 Python 下编译的 _wrapper.abi3.so 声明 NEEDED libpython<旧版>.so，
+# pkg upgrade 后 dlopen 找不到旧版，加载失败降级系统 curl。检测并重建。
+info "检查 curl_cffi 是否可用（旧 Python 版本编译产物会 ABI 失配）"
+if python -c "import curl_cffi" 2>/dev/null; then
+    info "curl_cffi 可用"
+else
+    warn "curl_cffi 不可用（可能是 Python 版本升级导致旧编译产物失配），尝试重建"
+    if pip install --force-reinstall --no-cache-dir curl_cffi; then
+        info "curl_cffi 重建完成"
+    else
+        warn "重建失败，下载器将降级使用系统 curl（功能可用，仅失去 TLS 指纹伪装）"
+    fi
+fi
+
 info "基础工具已安装"
 
 # 升级 pip
