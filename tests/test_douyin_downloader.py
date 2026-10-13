@@ -394,6 +394,79 @@ class TestFetchPageCaptchaRetry:
         assert "验证码中间页" in r.text
 
 
+class TestFetchAwemeDetail:
+    """detail API：2xx 非 JSON（空响应/拦截页）是概率性限流信号——
+    应退避重试并在日志里带出服务端返回头部，而不是一次判死。
+    （2026-10 实测：同链接 Mac 3/3 过，另一网络环境 0.2s 空响应失败）"""
+
+    _OK = json.dumps({"status_code": 0, "aweme_detail": {"aweme_id": "1"}})
+
+    class _Resp:
+        def __init__(self, text, status=200):
+            self.text = text
+            self.status_code = status
+            self.url = "https://www.douyin.com/aweme/v1/web/aweme/detail/"
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise Exception(f"HTTP {self.status_code}")
+
+    class _Session:
+        def __init__(self, items):
+            self._items = list(items)
+            self.calls = 0
+
+        def get(self, url, **kwargs):
+            self.calls += 1
+            item = self._items.pop(0) if self._items else TestFetchAwemeDetail._OK
+            return item(self) if callable(item) else item
+
+        def close(self):
+            pass
+
+    def _resp(self, text, status=200):
+        return self._Resp(text, status)
+
+    def _run(self, monkeypatch, session):
+        import douyin_downloader as dd
+        monkeypatch.setattr("douyin_downloader.time.sleep", lambda s: None)
+        return dd.fetch_aweme_detail("7691296880559540623", "ttwid=x", session)
+
+    def test_success(self, monkeypatch):
+        session = self._Session([self._resp(self._OK)])
+        assert self._run(monkeypatch, session) == {"aweme_id": "1"}
+        assert session.calls == 1
+
+    def test_empty_body_retried_then_success(self, monkeypatch):
+        # 空响应是限流 blip：重试后成功
+        session = self._Session([self._resp(""), self._resp(self._OK)])
+        assert self._run(monkeypatch, session) == {"aweme_id": "1"}
+        assert session.calls == 2
+
+    def test_html_block_page_retried(self, monkeypatch):
+        html = "<html><head></head><body>验证</body></html>"
+        session = self._Session([self._resp(html), self._resp(self._OK)])
+        assert self._run(monkeypatch, session) == {"aweme_id": "1"}
+        assert session.calls == 2
+
+    def test_non_json_exhausted_returns_none(self, monkeypatch):
+        session = self._Session([self._resp("")] * 5)
+        assert self._run(monkeypatch, session) is None
+        assert session.calls == 3  # 默认重试 3 次
+
+    def test_argus_403_not_retried(self, monkeypatch):
+        resp = self._resp("Blocked by ArgusSecurityPlugin Uifid Not Found", 403)
+        session = self._Session([resp])
+        assert self._run(monkeypatch, session) is None
+        assert session.calls == 1  # 确定性拒绝，不重试
+
+    def test_status_code_nonzero_returns_none(self, monkeypatch):
+        body = json.dumps({"status_code": 8, "status_msg": "flower"})
+        session = self._Session([self._resp(body)])
+        assert self._run(monkeypatch, session) is None
+        assert session.calls == 1
+
+
 class TestExtractDouyinImageUrlWatermarkFilter:
     """downloadUrlList 在真实页面是 ~tplv-dy-water-* 水印端，urlList 才是无水印端。"""
 

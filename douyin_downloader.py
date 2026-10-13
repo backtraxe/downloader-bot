@@ -413,11 +413,21 @@ def extract_video_play_urls(video):
     return []
 
 
+class _NonJsonResponse(RuntimeError):
+    """detail API 返回 2xx 但正文非 JSON：空响应或风控拦截页。
+
+    抖音对同 IP 高频请求会间歇性回空 body（或整页拦截）而不是 403，
+    属于概率性信号，应退避重试，而不是一次失败（2026-10 实测：
+    同一链接 Mac 直连 3/3 全过，另一网络环境 0.2s 返回空响应）。
+    """
+
+
 def fetch_aweme_detail(aweme_id, cookie, session, max_retries=3):
     """调签名 detail API 取 aweme_detail，成功返回 dict，失败返回 None。
 
     Argus 403（Blocked by ArgusSecurityPlugin）是确定性拒绝，不重试；
-    瞬时网络错误按指数退避重试至 max_retries 次。
+    2xx 但非 JSON（_NonJsonResponse）与瞬时网络错误按指数退避重试
+    至 max_retries 次。失败日志带服务端返回头部，便于远程定位。
     """
     jar = _cookie_dict(cookie)
     api_url, extra_headers = build_signed_detail_url(aweme_id, jar)
@@ -433,23 +443,35 @@ def fetch_aweme_detail(aweme_id, cookie, session, max_retries=3):
         try:
             r = session.get(api_url, headers=headers, timeout=15,
                             impersonate=_IMPERSONATE)
-            if r.status_code == 403 and "ArgusSecurityPlugin" in (r.text or ""):
+            text = r.text or ""
+            if r.status_code == 403 and "ArgusSecurityPlugin" in text:
                 logger.error(
                     "detail API 被 Argus 风控拒绝（%s）。多为同 IP 高频请求被"
                     "限流：建议冷却 10–30 分钟或换网络后重试。",
-                    (r.text or "")[:60].strip())
+                    text[:60].strip())
                 return None
             r.raise_for_status()
-            data = r.json()
+            try:
+                data = json.loads(text)
+            except ValueError:
+                raise _NonJsonResponse(
+                    f"{r.status_code} 非 JSON 响应（{len(text)} 字节）: "
+                    f"{text[:80]!r}")
         except Exception as e:
             last_err = e
-            if attempt < max_retries and _is_transient_error(e):
+            retryable = _is_transient_error(e) or isinstance(e, _NonJsonResponse)
+            if attempt < max_retries and retryable:
                 wait = attempt * 3 + random.uniform(0, 1)
                 logger.warning("detail API 请求重试 %d/%d 将在 %.1fs 后重试: %s",
                                attempt, max_retries, wait, e)
                 time.sleep(wait)
                 continue
             logger.error("detail API 请求失败: %s", last_err)
+            if isinstance(last_err, _NonJsonResponse):
+                logger.error(
+                    "抖音对该设备/IP 返回了空响应或拦截页——多为同 IP 高频"
+                    "限流或新增设备风控：建议冷却 10–30 分钟、换网络或刷新"
+                    " Cookie（cookie_import.py）后重试")
             return None
         status = data.get("status_code")
         detail = data.get("aweme_detail")
