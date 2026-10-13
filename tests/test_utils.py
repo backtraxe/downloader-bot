@@ -8,6 +8,8 @@ import pytest
 from utils import (
     build_download_dir,
     cookie_header_to_netscape,
+    cookie_list_to_header,
+    cookie_list_to_netscape,
     extract_url_numeric_id,
     get_image_dimensions,
     guess_extension,
@@ -237,6 +239,63 @@ class TestCookieHeaderToNetscape:
         content = out_file.read_text()
         assert ".bilibili.com" in content
         assert "SESSDATA" in content
+
+
+# ---------------- cookie_list_to_netscape / cookie_list_to_header ----------------
+
+# Playwright context.cookies() 的最小结构样本
+def _pw_cookie(name, value, domain=".example.com", **kw):
+    base = {"name": name, "value": value, "domain": domain,
+            "path": "/", "expires": -1, "secure": True}
+    base.update(kw)
+    return base
+
+
+class TestCookieListToNetscape:
+    def test_basic(self):
+        cookies = [_pw_cookie("sessionid", "abc"),
+                   _pw_cookie("ttwid", "xyz", secure=False)]
+        out = cookie_list_to_netscape(cookies)
+        lines = [l for l in out.splitlines() if l and not l.startswith("#")]
+        assert len(lines) == 2
+        f0 = lines[0].split("\t")
+        assert f0[0] == ".example.com"
+        assert f0[1] == "TRUE"          # 点前缀 → 含子域
+        assert f0[3] == "TRUE"          # secure
+        assert f0[5:] == ["sessionid", "abc"]
+        assert lines[1].split("\t")[3] == "FALSE"
+
+    def test_session_cookie_gets_far_expire(self):
+        out = cookie_list_to_netscape([_pw_cookie("a", "1", expires=-1)])
+        line = [l for l in out.splitlines() if not l.startswith("#")][0]
+        assert int(line.split("\t")[4]) > 4000000000
+
+    def test_host_cookie_no_subdomain_flag(self):
+        out = cookie_list_to_netscape([_pw_cookie("a", "1", domain="example.com")])
+        line = [l for l in out.splitlines() if not l.startswith("#")][0]
+        assert line.split("\t")[1] == "FALSE"
+
+    def test_skips_empty_name_and_writes_file(self, tmp_path):
+        out_file = tmp_path / "c.txt"
+        out = cookie_list_to_netscape(
+            [_pw_cookie("", "x"), _pw_cookie("ok", "1")], str(out_file))
+        lines = [l for l in out.splitlines() if l and not l.startswith("#")]
+        assert len(lines) == 1
+        assert out_file.read_text() == out
+
+
+class TestCookieListToHeader:
+    def test_basic_join(self):
+        cookies = [_pw_cookie("web_session", "s1"), _pw_cookie("a1", "a1v")]
+        assert cookie_list_to_header(cookies) == "web_session=s1; a1=a1v"
+
+    def test_domain_filter(self):
+        cookies = [_pw_cookie("web_session", "s1", domain=".xiaohongshu.com"),
+                   _pw_cookie("tracker", "t", domain=".third-party.com")]
+        assert cookie_list_to_header(cookies, "xiaohongshu.com") == "web_session=s1"
+
+    def test_skips_empty_name(self):
+        assert cookie_list_to_header([_pw_cookie("", "x"), _pw_cookie("a", "1")]) == "a=1"
 
 
 # ---------------- init_useragent ----------------

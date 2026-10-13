@@ -134,10 +134,41 @@ iOS 没有 DevTools，也**无法**用“快捷指令”读取 Safari 的 Cookie
 
 ### 移动端 — 安卓
 
-- **要 Netscape 文件（yt-dlp 直接用）**：用 **Firefox for Android** + [Android Cookie Importer](https://addons.mozilla.org/en-US/android/search/?q=cookies.txt) 扩展，登录后导出 `cookies.txt`，粘进 `cookies/<站点名>.txt`。
+- **要 Netscape 文件（yt-dlp 直接用）**：用 **Edge 安卓版**（自带扩展支持）或 **Firefox for Android** + [Android Cookie Importer](https://addons.mozilla.org/en-US/android/search/?q=cookies.txt) 扩展，登录后导出 `cookies.txt`，粘进 `cookies/<站点名>.txt`。
 - **要请求头字符串**：用 [Reqable](https://reqable.com/)（原 HttpCanary，本地 VPN + CA 证书）抓包，从请求里复制 `Cookie` 头。
 
-> Chrome/Edge 的 Cookie 在非 root 设备上无法直接读取（App 沙盒保护），不要尝试去翻系统文件。
+> Chrome/Edge 的 Cookie 在非 root 设备上无法靠翻系统文件直接读取（App 沙盒保护）；但浏览器**扩展**运行在内核内可以读，所以走扩展导出才是正路。
+
+### 手机上 Cookie 失效的快速恢复（Termux，不依赖电脑）
+
+一次性准备：
+
+1. 安装 **Termux:API** App（与 Termux 同来源，F-Droid 版），并在 Termux 里 `pkg install termux-api`
+2. 日常用的浏览器只要支持扩展即可——**Edge 安卓版**（自带扩展支持，无需换浏览器）、Kiwi 或 Firefox for Android 都行——给它装 **Cookie-Editor** 扩展（支持导出 Header String / Netscape 两种格式）
+
+恢复流程（约 30 秒）：
+
+1. 在该浏览器里打开对应网页版并登录（手机号验证码登录即可，无需扫码）：
+   抖音 `douyin.com`、小红书 `xiaohongshu.com`、bilibili `bilibili.com`
+2. Cookie-Editor 里把本站 Cookie 复制到剪贴板（弹窗底部最右的 ↑ 图标是
+   Export；手机屏窄找不到也没关系——JSON / Header String / Netscape
+   **任意格式都可以**，脚本自动识别）
+3. Termux 里一条命令写入（格式识别 + 站点格式转换由 `cookie_import.py` 完成）：
+
+   ```bash
+   termux-clipboard-get | python cookie_import.py douyin
+   termux-clipboard-get | python cookie_import.py xiaohongshu
+   termux-clipboard-get | python cookie_import.py bilibili
+   ```
+
+   桌面端也通用，把扩展导出的文件重定向即可：
+   `python cookie_import.py bilibili < ~/Downloads/cookies.txt`
+
+说明：
+
+- 抖音登录后 `sessionid`/`ttwid` 与视频签名必需的 `UIFID`/`s_v_web_id` 会天然齐全；失效的典型症状是脚本提示"jsvm 反爬挑战页 / Cookie 失效"。
+- 小红书除登录外，链接本身仍需带 `xsec_token`（2026-10 起裸 `explore/<id>` 链接一律 404，与 Cookie 无关）；从 App 分享的短链自带该参数。
+- bilibili 的 Cookie 仅在下不了高清/大会员画质时才需要更新，普通视频可空。
 
 ### 关于抖音 / 小红书 / Instagram 的 App
 

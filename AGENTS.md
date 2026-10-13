@@ -20,6 +20,7 @@ douyin_websign.py  # x-secsdk-web-signature（vendored，Argus 拦截的对应�
 1024_downloader.py   # 通用静态网页抓取（curl_cffi TLS 伪装）
 http_client.py       # HTTP 统一封装：curl_cffi 优先，不可用时降级系统 curl 命令
 sites.py             # URL→站点名映射、Cookie 文件加载（新增站点识别只改这里）
+cookie_import.py     # stdin 吃任意格式 Cookie（JSON/Cookie头/Netscape）按站点写 cookies/<站点>.txt
 utils.py             # 日志、文件名清洗、目录构造、UA 初始化、cookie 转换等共用函数
 live_photo.py        # 实况照片后处理（独立 CLI，不被任何下载模块 import）
 setup_termux.sh      # Termux 首次使用配置脚本（仅 Termux 环境）
@@ -97,6 +98,7 @@ pytest 是唯一框架，371 个测试全部离线（不联网）。测试位于
 - `download/` 和 `cookies/` 都已 gitignore，**绝不提交**；不要打印 cookie 内容。
 - **两个入口的 cookie 格式不同**：yt-dlp 后端（downloader.py）要 Netscape cookie 文件（可用 `utils.cookie_header_to_netscape` 转换）；xhs_downloader 直接把文件内容塞进 `Cookie:` 请求头，要的是浏览器复制的请求头整段字符串。填错格式会被静默忽略或判定未登录（详见 README）。
 - douyin 图文/视频都由 douyin_downloader 消费同一文件：经 `cookie_text_to_header` 自动识别 Netscape 或 `Cookie:` 请求头整段两种格式——推荐统一填 Netscape（其他 yt-dlp 站点也兼容）；视频签名要求 Cookie 含 `UIFID`/`s_v_web_id`（有效登录态天然齐全）。注意 yt-dlp 复用 cookiefile 时会回写该文件（jar resave），属预期行为。
+- `cookie_import.py` 是手机端恢复 Cookie 的推荐入口：stdin 自动识别 Cookie-Editor 的 JSON / `Cookie:` 请求头整段 / Netscape 三种导出（`detect_format`），按站点书面格式写文件——douyin/bilibili → Netscape（yt-dlp 可读），xiaohongshu → 请求头整段且 JSON 输入按域过滤第三方 cookie（`convert_to_site_format`）。Termux 用法：`termux-clipboard-get | python cookie_import.py <站点>`；桌面端可重定向扩展导出文件。
 - Pillow / pillow-heif 为可选依赖（requirements.txt 中注释列出）：缺 Pillow 时装饰过滤自动回退体积阈值，缺 pillow-heif 时 live_photo 不能转 HEIC。Termux 上 Pillow 无 Android wheel，用 `pkg install python-pillow`。
 
 ## 提交与 PR
