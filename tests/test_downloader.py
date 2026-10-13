@@ -89,9 +89,9 @@ class TestDispatchUrl:
     @pytest.mark.parametrize("url", [
         "https://www.youtube.com/watch?v=abc",
         "https://www.bilibili.com/video/BV1xx",
-        "https://www.douyin.com/video/123",
         "https://www.instagram.com/p/Cabc/",
         "https://x.com/user/status/123",
+        "https://www.douyin.com/user/MS4wLjA",  # douyin 非作品页仍兜底 yt-dlp
     ])
     def test_ytdlp_sites_route_to_download_url(self, url, monkeypatch):
         import downloader
@@ -141,6 +141,20 @@ class TestDiagnoseError:
         kind, msg = diagnose_error("some weird error")
         assert kind == "unknown"
         assert msg == "some weird error"
+
+    def test_douyin_argus_block_not_cookie_expired(self):
+        # yt-dlp DouyinIE 调 aweme/v1/web/aweme/detail/ 无 a_bogus 签名被
+        # Argus 风控 403 时抛 "Fresh cookies ... are needed"，文案像 Cookie
+        # 过期，实际是视频详情接口的系统性拦截——必须翻译成明确提示，
+        # 防止用户白刷 Cookie（2026-10 实测，刷新 Cookie 无效）
+        from downloader import diagnose_error
+        kind, msg = diagnose_error(
+            "[Douyin] 7556303777536740671: Fresh cookies (not necessarily "
+            "logged in) are needed; please report this issue on "
+            "https://github.com/yt-dlp/yt-dlp/issues"
+        )
+        assert kind == "blocked"
+        assert "Cookie 过期" in msg or "风控" in msg
 
 
 # ---------------- resolve_short_link ----------------
@@ -238,18 +252,38 @@ class TestDispatchDouyinNoteRouting:
         downloader.dispatch_url("https://www.douyin.com/note/7666381907030529443")
         assert calls == []
 
-    def test_video_url_not_misrouted_to_note_parser(self, monkeypatch):
+    def test_video_url_routes_to_video_parser(self, monkeypatch):
+        # /video/ 走签名 detail API 的手写视频解析器
+        # （yt-dlp DouyinIE 2026-10 被 Argus 风控签名拦截，详见 README）
         import downloader
 
-        note_calls, ytdlp_calls = [], []
+        video_calls, note_calls, ytdlp_calls = [], [], []
+        monkeypatch.setattr("sites.load_cookie_for_url", lambda url: "raw_cookie")
+        monkeypatch.setattr(
+            "douyin_downloader.download_douyin_video",
+            lambda url, cookie: video_calls.append((url, cookie)),
+        )
         monkeypatch.setattr(
             "douyin_downloader.download_douyin_note",
             lambda url, cookie: note_calls.append(url),
         )
         monkeypatch.setattr("downloader.download_url", lambda u: ytdlp_calls.append(u))
         downloader.dispatch_url("https://www.douyin.com/video/7666381907030529443")
-        assert note_calls == []
-        assert ytdlp_calls == ["https://www.douyin.com/video/7666381907030529443"]
+        assert video_calls == [
+            ("https://www.douyin.com/video/7666381907030529443", "raw_cookie")]
+        assert note_calls == [] and ytdlp_calls == []
+
+    def test_video_url_without_cookie_skips_download(self, monkeypatch):
+        import downloader
+
+        video_calls = []
+        monkeypatch.setattr("sites.load_cookie_for_url", lambda url: None)
+        monkeypatch.setattr(
+            "douyin_downloader.download_douyin_video",
+            lambda url, cookie: video_calls.append(url),
+        )
+        downloader.dispatch_url("https://www.douyin.com/video/7666381907030529443")
+        assert video_calls == []
 
 
 class TestResolveShortLinkWithRetry:

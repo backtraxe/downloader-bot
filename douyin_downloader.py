@@ -1,14 +1,21 @@
 # -*- coding: utf-8 -*-
-"""抖音图文笔记（douyin.com/note/<id>）手写解析下载。
+"""抖音图文笔记（douyin.com/note/<id>）与视频（/video/<id>）手写解析下载。
 
-yt-dlp 的 DouyinIE 只支持 /video/ 类型，图文笔记需走手写解析：
-带有效登录 Cookie 请求笔记页，从内嵌数据中提取 aweme detail——
-新版桌面页在 `self.__pace_f.push` 流式数据块（React Flight，主路径，
-见 parse_pace_f_detail），旧版在 RENDER_DATA JSON（递归定位，见
-extract_aweme_detail）。字段名为 camelCase（awemeId/downloadUrlList/
-authorInfo），兼容老 snake_case（aweme_id/download_url_list/author）。
-未登录 / Cookie 失效时抖音返回 jsvm 反爬挑战页（空 body + _$jsvmprt 混淆脚本），
-由 detect_jsvm_challenge 识别并提示重新填写 cookies/douyin.txt。
+图文笔记需走手写解析：带有效登录 Cookie 请求笔记页，从内嵌数据中提取
+aweme detail——新版桌面页在 `self.__pace_f.push` 流式数据块（React
+Flight，主路径，见 parse_pace_f_detail），旧版在 RENDER_DATA JSON（递归
+定位，见 extract_aweme_detail）。字段名为 camelCase（awemeId/
+downloadUrlList/authorInfo），兼容老 snake_case（aweme_id/
+download_url_list/author）。未登录 / Cookie 失效时抖音返回 jsvm 反爬
+挑战页（空 body + _$jsvmprt 混淆脚本），由 detect_jsvm_challenge 识别
+并提示重新填写 cookies/douyin.txt。
+
+视频（/video/）走签名的 aweme detail API：2026-08/09 起该接口由 Argus
+风控把守，yt-dlp 的 DouyinIE 无签名整拦（报误导性 "Fresh cookies
+needed"），须补齐 a_bogus + 伪 msToken + x-secsdk-web-signature 三件套
+（纯本地计算，算法移植自 Evil0ctal/Douyin_TikTok_Download_API，
+Apache-2.0，见 douyin_abogus/douyin_websign 头注）。
+页面侧无活路：视频页 pace_f 数据里 aweme: null，详情全靠带签名的 API。
 
 Cookie 文件两种格式皆可：Netscape（与 yt-dlp 共用 cookies/douyin.txt）
 或浏览器复制的 `Cookie:` 请求头整段——经 utils.cookie_text_to_header 统一转换。
@@ -20,9 +27,11 @@ import random
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import unquote
+from urllib.parse import quote, unquote, urlencode
 
+import douyin_websign
 import http_client
+from douyin_abogus import ABogus
 from utils import (
     build_download_dir,
     extract_urls,
@@ -292,6 +301,166 @@ def resolve_douyin_basename(detail):
     return "douyin"
 
 
+# ---------------- 视频（/video/）：签名详情 API ----------------
+
+# 抖音视频 URL：/video/<数字ID>
+_VIDEO_URL_RE = re.compile(r"https?://(?:www\.)?douyin\.com/video/(?P<id>\d+)")
+
+_DETAIL_API = "https://www.douyin.com/aweme/v1/web/aweme/detail/"
+
+# detail API 基础 query 参数——逐项与发出去的 _UA150（Chrome150/Windows）
+# 指纹对齐：UA 参与 a_bogus 摘要，query 里的指纹段会被服务端交叉核对
+_API_BASE_PARAMS = {
+    "device_platform": "webapp", "aid": "6383", "channel": "channel_pc_web",
+    "pc_client_type": "1", "version_code": "290100", "version_name": "29.1.0",
+    "cookie_enabled": "true", "screen_width": "1920", "screen_height": "1080",
+    "browser_language": "zh-CN", "browser_platform": "Win32",
+    "browser_name": "Chrome", "browser_version": "150.0.0.0",
+    "browser_online": "true", "engine_name": "Blink",
+    "engine_version": "150.0.0.0", "os_name": "Windows", "os_version": "10",
+    "cpu_core_num": "8", "device_memory": "8", "platform": "PC",
+    "downlink": "10", "effective_type": "4g", "round_trip_time": "0",
+    "update_version_code": "170400",
+}
+
+_MS_TOKEN_ALPHABET = \
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
+
+# 水印播放地址标记——命中即剔除（2026-08 前老协议的带水印端形式）
+_PLAYWM_MARK = "playwm"
+
+
+def is_douyin_video_url(url):
+    """判断 URL 是否为抖音视频页（/video/<数字ID>）。"""
+    return bool(url) and _VIDEO_URL_RE.search(url) is not None
+
+
+def _gen_false_ms_token():
+    """伪造 msToken：服务端对 detail 端点不校验（Evil0ctal 2026-09 实测
+    伪造/无/矛盾 token 均放行），126 位随机串 + "==" 后缀。"""
+    return "".join(random.choice(_MS_TOKEN_ALPHABET) for _ in range(126)) + "=="
+
+
+def build_signed_detail_url(aweme_id, cookies, user_agent=_UA150):
+    """构造带三件套签名的 detail API URL 及附加请求头。
+
+    2026-08/09 起该接口由 Argus 风控插件把守：缺签名请求一律 403
+    "Blocked by ArgusSecurityPlugin Uifid Not Found"（yt-dlp 的 DouyinIE
+    即因此整体失效，报误导性的 "Fresh cookies needed"）。三件套均为纯
+    本地计算（算法见 douyin_abogus/douyin_websign 头注，移植自
+    Evil0ctal/Douyin_TikTok_Download_API，Apache-2.0）：
+      a_bogus                —— query 全参的 bdms.js 签名（SM3+RC4 变体）
+      msToken                —— 伪随机串，服务端不校验
+      x-secsdk-web-signature —— md5(uifid_timestamp_盐_query)，这是
+                                "Uifid Not Found" 拦截报文的对应物
+    cookies 需含 UIFID(/UIFID_TEMP) 与 s_v_web_id——有效登录态 Cookie
+    天然齐全。2026-10-14 本机实测：同一接口、同一 Cookie，补齐三件套后
+    200 返回完整 aweme_detail 与无水印播放地址。
+
+    cookies 为 {name: value} 映射。返回 (url, 附加请求头)；缺 UIFID 时
+    退化为仅 a_bogus 签名、无附加头（未保护端点仍可用，不伪造 websign）。
+    """
+    params = dict(_API_BASE_PARAMS, aweme_id=str(aweme_id),
+                  msToken=_gen_false_ms_token())
+    query = urlencode(params)
+    bogus = ABogus(user_agent).get_value(query)
+    query = f"{query}&a_bogus={quote(bogus, safe='')}"
+    uifid = douyin_websign.pick_uifid(cookies)
+    if not uifid:
+        return _DETAIL_API + "?" + query, {}
+    # websign 对整串重新按 JS URLSearchParams 语义序列化后 md5——
+    # 先解码回原值，避免对 a_bogus 层的百分号编码二次转义（签发的字节与
+    # 发送的字节必须一致，这是它能过校验的唯一原因）
+    pairs = [(unquote(k), unquote(v)) for k, _, v in
+             (p.partition("=") for p in query.split("&"))]
+    fp = (cookies or {}).get(douyin_websign.VERIFY_FP_COOKIE)
+    if fp:
+        pairs += [("verifyFp", fp), ("fp", fp)]
+    final_query, _, headers = douyin_websign.sign(pairs, uifid)
+    return _DETAIL_API + "?" + final_query, headers
+
+
+def _cookie_dict(cookie_header):
+    """`Cookie: a=b; c=d` 请求头字符串 → {name: value} 映射。"""
+    jar = {}
+    for part in (cookie_header or "").split(";"):
+        name, _, value = part.partition("=")
+        if name.strip():
+            jar[name.strip()] = value.strip()
+    return jar
+
+
+def extract_video_play_urls(video):
+    """视频直链候选列表，按优先级排序。
+
+    优先 video.play_addr.url_list——网页播放端，2026-10 实测为无水印 CDN
+    净版（抖音播放页地址默认净版；download_addr 是带烙印水印的下载端，
+    不取）；play_addr 全空时回退 video.bit_rate 首个有效码率档。
+    含 playwm 标记的候选一律剔除（水印版）。
+    """
+    video = video or {}
+
+    def _clean(url_list):
+        return [u for u in (url_list or []) if u and _PLAYWM_MARK not in u]
+
+    urls = _clean((video.get("play_addr") or {}).get("url_list"))
+    if urls:
+        return urls
+    for tier in video.get("bit_rate") or []:
+        urls = _clean(((tier or {}).get("play_addr") or {}).get("url_list"))
+        if urls:
+            return urls
+    return []
+
+
+def fetch_aweme_detail(aweme_id, cookie, session, max_retries=3):
+    """调签名 detail API 取 aweme_detail，成功返回 dict，失败返回 None。
+
+    Argus 403（Blocked by ArgusSecurityPlugin）是确定性拒绝，不重试；
+    瞬时网络错误按指数退避重试至 max_retries 次。
+    """
+    jar = _cookie_dict(cookie)
+    api_url, extra_headers = build_signed_detail_url(aweme_id, jar)
+    headers = {
+        "User-Agent": _UA150,
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.douyin.com/",
+        "Cookie": cookie,
+    }
+    headers.update(extra_headers)
+    last_err = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            r = session.get(api_url, headers=headers, timeout=15,
+                            impersonate=_IMPERSONATE)
+            if r.status_code == 403 and "ArgusSecurityPlugin" in (r.text or ""):
+                logger.error(
+                    "detail API 被 Argus 风控拒绝（%s）。多为同 IP 高频请求被"
+                    "限流：建议冷却 10–30 分钟或换网络后重试。",
+                    (r.text or "")[:60].strip())
+                return None
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries and _is_transient_error(e):
+                wait = attempt * 3 + random.uniform(0, 1)
+                logger.warning("detail API 请求重试 %d/%d 将在 %.1fs 后重试: %s",
+                               attempt, max_retries, wait, e)
+                time.sleep(wait)
+                continue
+            logger.error("detail API 请求失败: %s", last_err)
+            return None
+        status = data.get("status_code")
+        detail = data.get("aweme_detail")
+        if status == 0 and detail:
+            return detail
+        logger.error("detail API 返回异常：status_code=%s status_msg=%s",
+                     status, data.get("status_msg"))
+        return None
+    return None
+
+
 def _fetch_page(session, url, headers, max_retries=5):
     """请求笔记页并跟随重定向（curl_cffi 默认跟随），瞬时错误自动重试。
     全部失败返回 None。
@@ -401,24 +570,34 @@ def download_douyin_note(url, cookie):
 
     html = response.text
 
-    # 反爬拦截页（jsvm 挑战 / 验证码中间页）：纯 HTTP 无法通过
+    # 反爬拦截页（jsvm 挑战 / 验证码中间页）：HTML 链路纯 HTTP 无法通过，
+    # 改走签名 detail API 兜底——拦截标记打在 HTML 链路上，API 链路独立
+    # （2026-10-14 对照实测：同一 IP+Cookie 组合笔记页 jsvm 挑战、
+    # 签名 detail API 照常 200 返回完整 detail）
     if detect_jsvm_challenge(html):
-        if any(m in html for m in _CAPTCHA_PAGE_MARKERS):
-            logger.error(
-                "提取失败：触发抖音验证码中间页——通常是同 IP 高频请求或该网络"
-                "被限流。建议：① 换个网络（如蜂窝 ↔ Wi-Fi）；② 等 10–30 分钟后再试；"
-                "③ 确认 cookies/douyin.txt 是有效登录态。（耗时 %.1f 秒）",
-                time.time() - start_time,
-            )
-        else:
-            logger.error(
-                "提取失败：抖音返回了反爬挑战页，说明 Cookie 缺失或已失效。"
-                "请在 cookies/douyin.txt 中填入有效的登录态 Cookie 后重试。（耗时 %.1f 秒）",
-                time.time() - start_time,
-            )
-        return
-
-    detail = extract_note_detail(html)
+        captcha_page = any(m in html for m in _CAPTCHA_PAGE_MARKERS)
+        m = _NOTE_URL_RE.search(url)
+        detail = None
+        if m:
+            logger.warning("笔记页被反爬挑战拦截，改走签名 detail API 兜底...")
+            detail = fetch_aweme_detail(m.group("id"), cookie, session)
+        if detail is None:
+            if captcha_page:
+                logger.error(
+                    "提取失败：触发抖音验证码中间页——通常是同 IP 高频请求或该网络"
+                    "被限流。建议：① 换个网络（如蜂窝 ↔ Wi-Fi）；② 等 10–30 分钟后再试；"
+                    "③ 确认 cookies/douyin.txt 是有效登录态。（耗时 %.1f 秒）",
+                    time.time() - start_time,
+                )
+            else:
+                logger.error(
+                    "提取失败：抖音返回了反爬挑战页，说明 Cookie 缺失或已失效。"
+                    "请在 cookies/douyin.txt 中填入有效的登录态 Cookie 后重试。（耗时 %.1f 秒）",
+                    time.time() - start_time,
+                )
+            return
+    else:
+        detail = extract_note_detail(html)
     if detail is None:
         # 排查辅助：带状态码/正文长度/落地 URL，便于区分空响应、登录引导页、结构变更
         logger.error(
@@ -496,14 +675,72 @@ def download_douyin_note(url, cookie):
     logger.info("该链接处理完成，耗时 %.1f 秒。", time.time() - start_time)
 
 
+def download_douyin_video(url, cookie):
+    """下载抖音视频（douyin.com/video/<id>）。
+
+    走签名的 detail API（见 build_signed_detail_url 头注）——2026-08/09
+    起 yt-dlp 的 DouyinIE 直连该接口被 Argus 风控签名拦死，本路径补齐
+    三件套（同一个 API、同一份 Cookie）。播放地址取网页播放端 play_addr
+    无水印 CDN 净版，按候选顺序尝试直至成功。落盘与 yt-dlp 后端同构：
+    download/douyin/[<作者>/]<标题前30字>_<awemeId>.mp4。
+    """
+    start_time = time.time()
+    m = _VIDEO_URL_RE.search(url or "")
+    aweme_id = m.group("id") if m else None
+    if not aweme_id:
+        logger.error("无法从 URL 提取视频 ID（需要 douyin.com/video/<id>）: %s", url)
+        return
+
+    session = http_client.Session()
+    logger.info("正在请求视频详情: aweme_id=%s", aweme_id)
+    detail = fetch_aweme_detail(aweme_id, cookie, session)
+    if detail is None:
+        logger.error("获取视频详情失败，耗时 %.1f 秒。", time.time() - start_time)
+        session.close()
+        return
+
+    aweme_id = str(detail.get("aweme_id") or detail.get("awemeId") or aweme_id)
+    play_urls = extract_video_play_urls(detail.get("video"))
+    if not play_urls:
+        logger.error(
+            "详情中未找到可播放直链（视频可能已删除或不可见），耗时 %.1f 秒。",
+            time.time() - start_time)
+        session.close()
+        return
+
+    author = extract_douyin_author(detail)
+    safe_title = f"{resolve_douyin_basename(detail)}_{aweme_id}"
+    # 目录仅为定位——单视频直接落在站点/作者层，与 yt-dlp 后端同构
+    parent = os.path.dirname(build_download_dir("douyin", safe_title, author=author))
+    os.makedirs(parent, exist_ok=True)
+    filepath = os.path.join(parent, f"{safe_title}.mp4")
+    logger.info("目标文件: %s", filepath)
+
+    headers = get_headers(cookie)
+    ok = False
+    for candidate in play_urls:
+        result = download_file(session, candidate, filepath, headers)
+        if result.startswith("  [失败]"):
+            logger.error("%s", result)
+            continue
+        logger.info("%s", result)
+        ok = True
+        break
+    if not ok:
+        logger.error("共 %d 个播放地址候选全部下载失败", len(play_urls))
+
+    session.close()
+    logger.info("该链接处理完成，耗时 %.1f 秒。", time.time() - start_time)
+
+
 if __name__ == "__main__":
     from sites import load_cookie_for_url
     from utils import cookie_text_to_header
 
-    logger.info("抖音图文笔记下载 (输入 q 退出)")
+    logger.info("抖音图文笔记/视频下载 (输入 q 退出)")
     while True:
         try:
-            raw_input = input("🔗 请输入笔记链接: ").strip()
+            raw_input = input("🔗 请输入笔记或视频链接: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n👋 退出程序")
             break
@@ -513,9 +750,12 @@ if __name__ == "__main__":
         if not raw_input:
             continue
         for target_url in extract_urls(raw_input):
-            if not is_douyin_note_url(target_url):
-                logger.warning("仅支持 douyin.com/note/<id> 图文笔记链接：%s", target_url)
+            if not is_douyin_note_url(target_url) and not is_douyin_video_url(target_url):
+                logger.warning("仅支持 douyin.com/note|video/<id> 链接：%s", target_url)
                 continue
             cookie = load_cookie_for_url(target_url)
             if cookie:
-                download_douyin_note(target_url, cookie_text_to_header(cookie))
+                if is_douyin_note_url(target_url):
+                    download_douyin_note(target_url, cookie_text_to_header(cookie))
+                else:
+                    download_douyin_video(target_url, cookie_text_to_header(cookie))

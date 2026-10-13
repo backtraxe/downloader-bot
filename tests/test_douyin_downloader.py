@@ -425,3 +425,123 @@ class TestExtractDouyinImageUrlWatermarkFilter:
                "urlList": []}
         # 有水印 fallback 仍然存在
         assert extract_douyin_image_url(img) == "https://x.example.com/a~tplv-dy-water-v2:a"
+
+
+# ---------------- 视频（/video/）签名详情 API 链路 ----------------
+
+class TestIsDouyinVideoUrl:
+    @pytest.mark.parametrize("url", [
+        "https://www.douyin.com/video/7556303777536740671",
+        "https://www.douyin.com/video/7556303777536740671?previous_page=web_code_link",
+        "http://douyin.com/video/12345",
+    ])
+    def test_video_urls(self, url):
+        from douyin_downloader import is_douyin_video_url
+        assert is_douyin_video_url(url) is True
+
+    @pytest.mark.parametrize("url", [
+        "https://www.douyin.com/note/7666381907030529443",
+        "https://v.douyin.com/BZjp8nC95xM/",
+        "https://www.douyin.com/user/MS4wLjA",
+        "",
+        None,
+    ])
+    def test_non_video_urls(self, url):
+        from douyin_downloader import is_douyin_video_url
+        assert is_douyin_video_url(url) is False
+
+
+class TestBuildSignedDetailUrl:
+    """detail API 三件套签名（a_bogus + 伪 msToken + x-secsdk-web-signature）。
+
+    x-secsdk-web-signature 是解密 Argus 403 "Uifid Not Found" 的关键
+    （2026-10-14 实测：yt-dlp 缺它在 detail API 一律 403）。
+    """
+    _COOKIES = {"UIFID_TEMP": "uid_test_123", "s_v_web_id": "verify_test_x"}
+
+    def _url_and_headers(self):
+        from douyin_downloader import build_signed_detail_url
+        return build_signed_detail_url("7556303777536740671", self._COOKIES)
+
+    def test_carries_required_params(self):
+        from urllib.parse import parse_qs, urlsplit
+        url, _ = self._url_and_headers()
+        q = parse_qs(urlsplit(url).query)
+        assert urlsplit(url).path.endswith("/aweme/v1/web/aweme/detail/")
+        for key in ("aweme_id", "aid", "msToken", "a_bogus",
+                    "verifyFp", "fp", "uifid", "timestamp",
+                    "x-secsdk-web-signature"):
+            assert key in q, f"缺少签名参数 {key}"
+        assert q["aweme_id"] == ["7556303777536740671"]
+        assert q["aid"] == ["6383"]
+        # 伪 msToken：126 位随机串 + "=="
+        assert len(q["msToken"][0]) == 128
+        # verifyFp/fp 取 Cookie 里的 s_v_web_id 原值
+        assert q["verifyFp"] == ["verify_test_x"]
+        assert q["fp"] == ["verify_test_x"]
+        # uifid 取 Cookie 里的 UIFID/UIFID_TEMP
+        assert q["uifid"] == ["uid_test_123"]
+
+    def test_websign_md5_matches_preimage(self):
+        import hashlib
+        url, extra_headers = self._url_and_headers()
+        query = url.split("?", 1)[1]
+        marker = "&x-secsdk-web-signature="
+        assert marker in query
+        body, sig = query.rsplit(marker, 1)
+        ts = dict(p.split("=", 1) for p in body.split("&")).get("timestamp")
+        from douyin_websign import SALT
+        expected = hashlib.md5(
+            f"uid_test_123_{ts}_{SALT}_{body}".encode()).hexdigest()
+        assert sig == expected
+        # 同名参数也复制进请求头（页面自己的行为，更像真浏览器）
+        assert extra_headers["x-secsdk-web-signature"] == sig
+        assert extra_headers["uifid"] == "uid_test_123"
+
+    def test_missing_uifid_falls_back_to_unsigned(self):
+        # 没有 UIFID 时仍给出 a_bogus 签名 URL（未保护端点可用），但不伪造 websign
+        from douyin_downloader import build_signed_detail_url
+        url, extra_headers = build_signed_detail_url("1", {"s_v_web_id": "x"})
+        assert "a_bogus=" in url
+        assert "x-secsdk-web-signature=" not in url
+        assert extra_headers == {}
+
+
+class TestExtractVideoPlayUrls:
+    """视频直链候选：play_addr 无水印优先，过滤 playwm，bit_rate 兜底。"""
+
+    def test_play_addr_url_list_in_order(self):
+        from douyin_downloader import extract_video_play_urls
+        video = {"play_addr": {"url_list": [
+            "https://v26-web.douyinvod.com/a",
+            "https://www.douyin.com/aweme/v1/play/?x",
+        ]}}
+        assert extract_video_play_urls(video) == [
+            "https://v26-web.douyinvod.com/a",
+            "https://www.douyin.com/aweme/v1/play/?x",
+        ]
+
+    def test_watermark_candidates_filtered(self):
+        from douyin_downloader import extract_video_play_urls
+        video = {"play_addr": {"url_list": [
+            "https://a.example.com/playwm/x",
+            "https://v26-web.douyinvod.com/clean",
+        ]}}
+        assert extract_video_play_urls(video) == [
+            "https://v26-web.douyinvod.com/clean"]
+
+    def test_falls_back_to_bit_rate(self):
+        from douyin_downloader import extract_video_play_urls
+        video = {
+            "play_addr": {"url_list": []},
+            "bit_rate": [
+                {"play_addr": {"url_list": ["https://v9.example.com/hd"]}},
+                {"play_addr": {"url_list": ["https://v9.example.com/sd"]}},
+            ],
+        }
+        assert extract_video_play_urls(video) == ["https://v9.example.com/hd"]
+
+    def test_empty_video_returns_empty(self):
+        from douyin_downloader import extract_video_play_urls
+        assert extract_video_play_urls({}) == []
+        assert extract_video_play_urls(None) == []

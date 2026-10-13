@@ -184,9 +184,22 @@ def diagnose_error(err_msg):
     kind 取值：
       need_login  —— 登录/Cookie 相关，重试无益
       transient  —— 瞬时网络错误，值得整链重试
+      blocked    —— 平台风控的确定性拦截（如抖音视频详情接口的 Argus
+                    签名校验），重试与刷新 Cookie 均无益
       unknown     —— 其他，原样回显
     """
     low = (err_msg or "").lower()
+    # yt-dlp DouyinIE 调 aweme/v1/web/aweme/detail/ 时没有 a_bogus 签名，
+    # 被 Argus 风控 403 后抛 "Fresh cookies (not necessarily logged in) are
+    # needed"——文案像 Cookie 过期，实际是视频详情接口的系统性拦截，
+    # 必须在通用 "cookies" 提示之前拦截，防止用户白刷 Cookie
+    # （2026-10 实测：Cookie 有效、笔记下载正常，刷新 Cookie 无效）
+    if "fresh cookies" in low:
+        return "blocked", (
+            "抖音视频详情接口启用了 JS 风控签名校验（Argus/a_bogus），"
+            "yt-dlp 拿不到播放地址，刷新 Cookie 无效（不是 Cookie 过期）；"
+            "抖音图文笔记下载不受影响"
+        )
     if any(k.lower() in low for k in _LOGIN_HINTS):
         return "need_login", "该内容可能需要登录或 Cookie 失效，请检查 cookies/<站点>.txt"
     if any(kw in low for kw in _TRANSIENT_KEYWORDS):
@@ -225,8 +238,8 @@ def dispatch_url(url):
     """统一入口：按站点自动分发到对应下载器。
 
     xiaohongshu     → xhs_downloader（手写解析，需 Cookie）
-    抖音图文笔记    → douyin_downloader（手写解析，需登录 Cookie）
-    yt-dlp 站点     → download_url（bilibili / douyin 视频 / youtube / instagram / twitter）
+    抖音图文/视频   → douyin_downloader（手写解析+签名 detail API，需登录 Cookie）
+    yt-dlp 站点     → download_url（bilibili / youtube / instagram / twitter）
     其他站点        → 1024_downloader（通用静态网页抓取）
     """
     site_name = get_site_name(url)
@@ -242,19 +255,29 @@ def dispatch_url(url):
         return
 
     if site_name == "douyin":
-        # 抖音图文笔记（/note/）yt-dlp 不支持，走手写解析；
-        # 短链先展开才能判断目标类型（/note/ 手写解析，/video/ 走 yt-dlp）。
-        # 展开偶发无重定向（服务端反爬不一致），带重试
-        from douyin_downloader import download_douyin_note, is_douyin_note_url
+        # /note/ 图文笔记、/video/ 视频都走手写解析（yt-dlp 的 DouyinIE
+        # 2026-08/09 起被 Argus 风控签名整拦，报误导性 "Fresh cookies
+        # needed"；视频经签名 detail API 手写下载，见 douyin_downloader）。
+        # 短链先展开才能判断目标类型；展开偶发无重定向，带重试
+        from douyin_downloader import (
+            download_douyin_note,
+            download_douyin_video,
+            is_douyin_note_url,
+            is_douyin_video_url,
+        )
 
         resolved = resolve_short_link_with_retry(url)
-        if is_douyin_note_url(resolved):
+        if is_douyin_note_url(resolved) or is_douyin_video_url(resolved):
             from sites import load_cookie_for_url
 
             cookie = load_cookie_for_url(url)
             if cookie:
-                download_douyin_note(resolved, cookie_text_to_header(cookie))
+                if is_douyin_note_url(resolved):
+                    download_douyin_note(resolved, cookie_text_to_header(cookie))
+                else:
+                    download_douyin_video(resolved, cookie_text_to_header(cookie))
         else:
+            # /user/ 等其他 douyin URL 仍兜底 yt-dlp
             download_url(url)
         return
 
