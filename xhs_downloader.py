@@ -281,6 +281,9 @@ def detect_note_not_found(html, final_url):
     并在 query 里带 errorCode=-510001，页面 title 为「你访问的页面不见了」。
     此时 __INITIAL_STATE__ 仍在但 noteDetailMap 为空，会被误判为页面结构变更。
     三信号任一命中即判定为笔记不存在，避免误导排查方向。
+
+    注意：error_code=300031（缺 xsec_token 被风控）同样落 404 页——
+    必须先经 detect_missing_xsec_token 区分，才能走到这里。
     """
     final_url = (final_url or "").lower()
     # 信号 1：重定向落地 URL 路径为 /404
@@ -291,6 +294,25 @@ def detect_note_not_found(html, final_url):
         return True
     # 信号 3：页面 title 文案
     if html and "你访问的页面不见了" in html:
+        return True
+    return False
+
+
+def detect_missing_xsec_token(html, final_url):
+    """检测"裸笔记链接缺 xsec_token 被风控落地"（error_code=300031）。
+
+    2026-10 起小红书对不带 xsec_token 的 /explore/<id> 直接访问 302 到 404
+    落地页，query 带 error_code=300031、error_msg=当前笔记暂时无法浏览。
+    这与"笔记真被删"(-510001) 共用 404 页和 title 文案——不先行区分会把
+    "链接缺参数"误报为"笔记已被删除"。两信号任一命中即判定：
+      - 最终落地 URL query 含 error_code=300031
+      - 页面文本含「当前笔记暂时无法浏览」
+    补救：带 xsec_token 的完整链接（浏览器地址栏/App 分享短链自带）。
+    """
+    final_url = (final_url or "").lower()
+    if "error_code=300031" in final_url:
+        return True
+    if html and "当前笔记暂时无法浏览" in html:
         return True
     return False
 
@@ -345,6 +367,17 @@ def download_xhs_media(url, cookie):
         logger.error(
             "提取失败：触发风控拦截或 Cookie 已失效（可能被重定向到验证页）。"
             "请在浏览器中打开链接完成验证后重试。（耗时 %.1f 秒）",
+            time.time() - start_time,
+        )
+        return
+
+    # 缺 xsec_token 检测（必须在 404 判定之前：300031 同样落 404 页，
+    # 误报成"笔记被删"会让用户白找链接——笔记其实在架上）
+    if detect_missing_xsec_token(html, response.url if response is not None else ""):
+        logger.error(
+            "提取失败：小红书要求笔记链接携带 xsec_token（风控校验）。"
+            "请复制带 xsec_token 参数的完整链接——浏览器地址栏里那一整段，"
+            "或 App 内点分享复制的短链（自带 token）。（耗时 %.1f 秒）",
             time.time() - start_time,
         )
         return

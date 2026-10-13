@@ -423,3 +423,42 @@ class TestDetectRiskControlQueryKeyFalsePositive:
     def test_login_path_still_detected(self):
         url = "https://www.xiaohongshu.com/login?redirect=xx"
         assert detect_risk_control("<html>x</html>", self._resp(url)) is True
+
+
+# ---------------- detect_missing_xsec_token ----------------
+
+class TestDetectMissingXsecToken:
+    """error_code=300031 专属判定：2026-10 起小红书对无 xsec_token 的裸
+    /explore/<id> 链接风控落地到 /404 页（"当前笔记暂时无法浏览"）。
+    这与"笔记真被删"(errorCode=-510001) 共用 404 页与 title 文案——
+    必须先行区分，否则会把"链接缺 xsec_token 参数"误报为"笔记已被删除"
+    （2026-10-14 实测：真实在架笔记裸链接 300031，带 xsec_token 即正常）。"""
+
+    def test_error_code_300031_in_final_url(self):
+        from xhs_downloader import detect_missing_xsec_token
+        url = ("https://www.xiaohongshu.com/404?source=/404/sec_abc"
+               "&error_code=300031&error_msg=xxx")
+        assert detect_missing_xsec_token("<html>x</html>", url) is True
+
+    def test_error_msg_marker_in_html(self):
+        from xhs_downloader import detect_missing_xsec_token
+        html = "<html>当前笔记暂时无法浏览</html>"
+        url = "https://www.xiaohongshu.com/explore/abc"
+        assert detect_missing_xsec_token(html, url) is True
+
+    def test_deleted_note_code_not_matched(self):
+        # 真被删(-510001) 走 detect_note_not_found，不是缺 token
+        from xhs_downloader import detect_missing_xsec_token
+        url = "https://www.xiaohongshu.com/404?errorCode=-510001"
+        assert detect_missing_xsec_token("<html>正常页</html>", url) is False
+
+    def test_normal_page_returns_false(self):
+        from xhs_downloader import detect_missing_xsec_token
+        html = "<html><title>我的笔记 - 小红书</title></html>"
+        url = "https://www.xiaohongshu.com/explore/abc?xsec_token=ABWU"
+        assert detect_missing_xsec_token(html, url) is False
+
+    def test_empty_inputs_returns_false(self):
+        from xhs_downloader import detect_missing_xsec_token
+        assert detect_missing_xsec_token("", "") is False
+        assert detect_missing_xsec_token(None, None) is False
