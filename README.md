@@ -25,7 +25,7 @@ python downloader.py
 | 小红书 | `xiaohongshu.com` / `xhslink.com` | 手写 `__INITIAL_STATE__` 解析 | 建议 |
 | YouTube | `youtube.com` / `youtu.be` | yt-dlp | 通常不需要 |
 | Bilibili | `bilibili.com` / `b23.tv` | yt-dlp | 建议（下高清需要） |
-| 抖音 | `douyin.com` / `v.douyin.com` | yt-dlp（视频）+ 手写图文解析（笔记） | 视频通常不需要；图文笔记需要登录态 |
+| 抖音 | `douyin.com` / `v.douyin.com` | 手写解析（图文笔记 + 视频，签名 detail API） | 需要登录态 |
 | Instagram | `instagram.com` / `instagr.am` | yt-dlp | 强烈建议（否则大概率失败） |
 | X(Twitter) | `x.com` / `twitter.com` / `t.co` | yt-dlp | 通常不需要 |
 | 其他网站 | 任意 | 通用静态网页抓取 | 按域名命名 |
@@ -42,6 +42,7 @@ python downloader.py
 
 - 手写解析 `window.__INITIAL_STATE__`，提取图片列表和视频流（比 yt-dlp 对小红书更可控）
 - 支持 `xhslink.com` 短链与 App 分享链接（含 `xsec_token`），脚本会跟随重定向到 `xiaohongshu.com` 后再解析
+- **2026-10 起链接必须带 `xsec_token` 参数**：小红书对裸 `explore/<id>` 链接强制风控（返回 `error_code=300031`「当前笔记暂时无法浏览」落地 404 页——不是笔记被删）。请从浏览器地址栏复制带 `xsec_token` 的一整段链接，或用 App 内"分享"复制的短链（自带 token）；缺 token 时脚本会明确提示而不是误报"笔记已被删除"
 - 需要在 `cookies/xiaohongshu.txt` 中填入浏览器 Cookie；文件不存在或为空时脚本会自动创建并提示
 - 实况照片（live photo）按"静态原图 + 实况视频"同序号配对下载（`001.heic` + `001.mp4`），静态图为 HEIF/JPEG 原图、视频按画质选最高档
 
@@ -60,7 +61,8 @@ python live_photo.py "download/xiaohongshu/<作者>/<标题>_<noteId>"
 - 抖音图文笔记（`douyin.com/note/<id>`，App 分享文案常见）yt-dlp 不支持，由 `douyin_downloader.py` 手写解析：带登录 Cookie 请求笔记页，从内嵌的 `RENDER_DATA`（或 `_ROUTER_DATA`）JSON 中提取图片列表与视频
 - **必须填有效登录态 Cookie** 到 `cookies/douyin.txt`：无 Cookie 时抖音返回 jsvm 反爬挑战页，脚本会识别并提示；Netscape 格式和浏览器复制的 `Cookie:` 请求头整段都能吃（脚本自动识别转换），与 yt-dlp 侧共用同一个文件
 - 图片默认下载**无水印最高档**（避开 `dy-water` 水印流水线，同档 q75 中 jpeg 优先）；与网页端浏览完全同源；输出 `download/douyin/[<作者>/]<标题>_<awemeId>/`，图片按 `001.jpg` 序号命名，实况图视频同序号配对 `001.mp4`，笔记级视频为 `video.mp4`
-- 抖音视频链接（`/video/<id>`）不受影响，仍走 yt-dlp
+- **抖音视频链接（`/video/<id>`）走签名 detail API**：2026-08/09 起视频详情接口（`aweme/v1/web/aweme/detail/`）启用了 JS 风控签名校验（Argus），yt-dlp 无签名整拦（报"Fresh cookies needed"误导为 Cookie 过期）；页面也不内嵌视频数据（pace_f 里 `aweme: null`）。本仓库补齐纯本地三件套签名后直连该 API——a_bogus（bdms.js 逆向）+ 伪 msToken + x-secsdk-web-signature（md5），算法移植自 [Evil0ctal/Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API)（Apache-2.0）。**Cookie 里的 `UIFID`/`s_v_web_id` 是签名必需项**（有效登录态天然齐全）；播放地址取网页播放端无水印 CDN 净版，输出 `download/douyin/[<作者>/]<标题>_<awemeId>.mp4`
+- 笔记页被反爬挑战（jsvm/验证码）拦截时自动改走同一个签名 detail API 兜底（两条链路风控独立），仍拦则按提示冷却/换网络
 
 #### 通用网页后端
 
@@ -148,7 +150,7 @@ iOS 没有 DevTools，也**无法**用“快捷指令”读取 Safari 的 Cookie
 
 - Cookie 是敏感凭据，`cookies/` 已在 `.gitignore` 中，**切勿提交**。
 - Cookie 有有效期，失效后需重新获取（典型症状：bilibili 下不到高清、instagram 报“需要登录”、小红书提示风控）。
-- 各站点需要的关键 Cookie：bilibili → `SESSDATA`；instagram → `sessionid`；小红书 → `web_session` / `a1`；抖音（图文笔记）→ `sessionid` / `ttwid`。
+- 各站点需要的关键 Cookie：bilibili → `SESSDATA`；instagram → `sessionid`；小红书 → `web_session` / `a1`；抖音 → `sessionid` / `ttwid`，视频签名另需 `UIFID` / `s_v_web_id`（登录态 Cookie 天然包含）。
 - 抖音图文笔记的是手写解析后端，与 yt-dlp 共用 `cookies/douyin.txt`：Netscape 格式或 `Cookie:` 请求头整段都可以（脚本经 `cookie_text_to_header` 自动识别转换），但**必须含有效登录态**，否则抖音返回 jsvm 反爬挑战页。
 
 ## 测试
