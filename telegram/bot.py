@@ -151,7 +151,9 @@ def handle_message(
             "caption 带 #作者 标签方便搜索。"
         )
         return replies
-    if not is_allowed(cfg, user_id):
+    # 频道消息不做用户白名单：频道里只有管理员能发帖（匿名管理员无
+    # from，拿不到 user_id，白名单无从匹配——实测被拒且回显 None）
+    if chat.get("type") != "channel" and not is_allowed(cfg, user_id):
         say(f"未授权用户。把你的用户 id 发给维护者加入白名单：{user_id}")
         logger.warning("拒绝未授权用户: %s", user_id)
         return replies

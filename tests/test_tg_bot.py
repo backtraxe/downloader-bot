@@ -143,6 +143,24 @@ class TestHandleMessage:
         assert any("未授权" in r and "999" in r for r in replies)
         assert s.sent[0][0] == "sendMessage"
 
+    def test_channel_post_bypasses_user_whitelist(self, tmp_path):
+        # 频道消息不做用户白名单：能发帖的只有频道管理员（匿名管理员无 from）
+        root = str(tmp_path / "download")
+
+        def dispatch(url):
+            d = os.path.join(root, "douyin", "背影", "我去！好美_123")
+            _touch(os.path.join(d, "001.jpg"))
+
+        s = _Session()
+        msg = {
+            "chat": {"id": -100123, "type": "channel"},
+            "sender_chat": {"id": -100123, "type": "channel"},
+            "text": "https://x.com/a",
+        }
+        replies = handle_message(s, _CFG, msg, dispatch=dispatch, download_root=root)
+        assert not any("未授权" in r for r in replies)
+        assert replies[0].startswith("开始下载")
+
     def test_no_link_hint(self):
         s = _Session()
         replies = handle_message(s, _CFG, _msg("今天天气不错"), dispatch=lambda u: None)
