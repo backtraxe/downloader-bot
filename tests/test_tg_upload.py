@@ -261,14 +261,15 @@ class TestPrepareOne:
         with Image.open(send) as again:  # 产物可再次被 PIL 打开
             again.verify()
 
-    def test_heic_missing_deps_falls_back(self, tmp_path, monkeypatch):
-        # pillow_heif 导入失败 → 原样返回（维持 document 现状）
+    def test_heic_missing_deps_falls_back(self, tmp_path, monkeypatch, caplog):
+        # pillow_heif 导入失败 → 原样返回（维持 document 现状），日志给出安装提示
         monkeypatch.setitem(sys.modules, "pillow_heif", None)
         p = _touch(tmp_path / "a.heic", b"x")
         tmpdir = tmp_path / "t"
         tmpdir.mkdir()
         send, temp = _prepare_one(p, str(tmpdir))
         assert send == p and temp is None
+        assert any("pillow-heif" in r.message for r in caplog.records)
 
     def test_heic_converted_to_jpeg(self, tmp_path):
         Image = pytest.importorskip("PIL.Image")

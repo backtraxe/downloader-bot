@@ -147,6 +147,10 @@ def _try_heic_to_jpeg(path, tmpdir):
         import pillow_heif
         from PIL import Image
     except ImportError:
+        logger.warning(
+            "HEIC 预览转码需要 pillow-heif（Termux 先 pkg install libheif 再 "
+            "pip install pillow-heif）；未安装，HEIC 按文件原样发送"
+        )
         return None
     try:
         pillow_heif.register_heif_opener()
