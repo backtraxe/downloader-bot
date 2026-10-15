@@ -28,7 +28,7 @@ import uuid
 
 from PIL import Image  # noqa: E402 核心功能依赖 Pillow，Termux 需 pkg install python-pillow
 
-from .utils import setup_logging
+from ..utils import setup_logging
 
 logger = setup_logging()
 

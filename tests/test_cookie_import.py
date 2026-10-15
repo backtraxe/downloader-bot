@@ -3,7 +3,7 @@
 
 import pytest
 
-from core.cookie_import import convert_to_site_format, detect_format
+from core.tools.cookie_import import convert_to_site_format, detect_format
 
 _HEADER = "sessionid=abc123; ttwid=xyz; UIFID=u-1"
 _NETSCAPE = (

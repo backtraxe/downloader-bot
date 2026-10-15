@@ -24,8 +24,8 @@ import logging
 import sys
 import time
 
-from .sites import cookie_file_for
-from .utils import cookie_list_to_header, cookie_list_to_netscape, setup_logging
+from ..sites import cookie_file_for
+from ..utils import cookie_list_to_header, cookie_list_to_netscape, setup_logging
 
 logger = logging.getLogger("downloader")
 

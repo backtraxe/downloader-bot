@@ -18,8 +18,8 @@ import argparse
 import json
 import sys
 
-from .sites import cookie_file_for
-from .utils import (
+from ..sites import cookie_file_for
+from ..utils import (
     cookie_header_to_netscape,
     cookie_list_to_header,
     cookie_list_to_netscape,

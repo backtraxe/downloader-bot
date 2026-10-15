@@ -3,7 +3,7 @@
 
 import os
 
-import core.live_photo as lp
+import core.tools.live_photo as lp
 
 
 def _make_jpeg(w=64, h=64):

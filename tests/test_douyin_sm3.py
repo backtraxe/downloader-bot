@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """douyin_sm3（vendored Apache-2.0）：SM3 哈希回归测试。"""
 
-from core.douyin_sm3 import sm3_hash, sm3_hexdigest, sm3_to_array
+from core.douyin_sign.douyin_sm3 import sm3_hash, sm3_hexdigest, sm3_to_array
 
 # GB/T 32905-2016 公布的 "abc" 测试向量
 _SM3_ABC = "66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0"

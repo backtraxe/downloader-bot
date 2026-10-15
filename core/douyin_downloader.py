@@ -14,7 +14,7 @@ download_url_list/author）。未登录 / Cookie 失效时抖音返回 jsvm 反�
 风控把守，yt-dlp 的 DouyinIE 无签名整拦（报误导性 "Fresh cookies
 needed"），须补齐 a_bogus + 伪 msToken + x-secsdk-web-signature 三件套
 （纯本地计算，算法移植自 Evil0ctal/Douyin_TikTok_Download_API，
-Apache-2.0，见 douyin_abogus/douyin_websign 头注）。
+Apache-2.0，见 douyin_sign/ 下 douyin_abogus、douyin_websign 头注）。
 页面侧无活路：视频页 pace_f 数据里 aweme: null，详情全靠带签名的 API。
 
 Cookie 文件两种格式皆可：Netscape（与 yt-dlp 共用 cookies/douyin.txt）
@@ -30,9 +30,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote, unquote, urlencode
 
-from . import douyin_websign
+from .douyin_sign import douyin_websign
 from . import http_client
-from .douyin_abogus import ABogus
+from .douyin_sign.douyin_abogus import ABogus
 from .utils import (
     build_download_dir,
     extract_urls,
@@ -384,7 +384,7 @@ def build_signed_detail_url(aweme_id, cookies, user_agent=_UA150):
     2026-08/09 起该接口由 Argus 风控插件把守：缺签名请求一律 403
     "Blocked by ArgusSecurityPlugin Uifid Not Found"（yt-dlp 的 DouyinIE
     即因此整体失效，报误导性的 "Fresh cookies needed"）。三件套均为纯
-    本地计算（算法见 douyin_abogus/douyin_websign 头注，移植自
+    本地计算（算法见 douyin_sign/ 下 douyin_abogus、douyin_websign 头注，移植自
     Evil0ctal/Douyin_TikTok_Download_API，Apache-2.0）：
       a_bogus                —— query 全参的 bdms.js 签名（SM3+RC4 变体）
       msToken                —— 伪随机串，服务端不校验

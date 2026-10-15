@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""兼容入口 shim：实现已迁至 core/live_photo.py。"""
+"""兼容入口 shim：实现已迁至 core/tools/live_photo.py。"""
 
-from core.live_photo import main
+from core.tools.live_photo import main
 
 if __name__ == "__main__":
     main()

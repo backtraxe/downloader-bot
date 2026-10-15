@@ -650,7 +650,7 @@ class TestBuildSignedDetailUrl:
         assert marker in query
         body, sig = query.rsplit(marker, 1)
         ts = dict(p.split("=", 1) for p in body.split("&")).get("timestamp")
-        from core.douyin_websign import SALT
+        from core.douyin_sign.douyin_websign import SALT
 
         expected = hashlib.md5(f"uid_test_123_{ts}_{SALT}_{body}".encode()).hexdigest()
         assert sig == expected

@@ -15,24 +15,20 @@ core/
   downloader.py        # 统一入口——dispatch_url() 按站点名路由到各后端
   xhs_downloader.py    # 小红书笔记解析（手写 __INITIAL_STATE__ 提取）
   douyin_downloader.py # 抖音图文笔记+视频（pace_f/RENDER_DATA 手写解析 + 签名 detail API，需登录 Cookie）
-  douyin_abogus.py     # a_bogus 签名（vendored，Apache-2.0，见文件头注）
-  douyin_sm3.py        # SM3 哈希（vendored，a_bogus 依赖）
-  douyin_websign.py    # x-secsdk-web-signature（vendored，Argus 拦截的对应签名）
   1024_downloader.py   # 通用静态网页抓取（curl_cffi TLS 伪装；数字开头只能 import_module 导入）
+  douyin_sign/         # vendored 签名三件套（Apache-2.0，见各文件头注；整体排除在 ruff 之外）
+  tools/               # 独立 CLI：cookie_import / cookie_login 维护 Cookie，live_photo 实况后处理
   http_client.py       # HTTP 统一封装：curl_cffi 优先，不可用时降级系统 curl 命令
   sites.py             # URL→站点名映射、Cookie 文件加载（新增站点识别只改这里）
   utils.py             # 日志、文件名清洗、目录构造、UA 初始化、cookie 转换等共用函数
   config.py          # 统一配置 config.json 加载（telegram 段供 tg 层；向后兼容旧 telegram.json）
-  cookie_import.py     # stdin 吃任意格式 Cookie（JSON/Cookie头/Netscape）按站点写 cookies/<站点>.txt
-  cookie_login.py      # Playwright 半自动登录刷新 cookies/<站点>.txt（可选依赖）
-  live_photo.py        # 实况照片后处理（独立 CLI，不被任何下载模块 import）
 telegram/
   bot.py               # Telegram 机器人（长轮询常驻）：聊天发链接→dispatch_url 下载→产物回传，caption 打 #作者 #站点 标签
   upload.py            # Telegram 直发（Bot API）：目录→10 张/组相册，HEIC/大图走 document；读 config.json 的 telegram 段
 根目录 downloader.py / xhs_downloader.py / douyin_downloader.py / 1024_downloader.py /
 live_photo.py / cookie_import.py / cookie_login.py / tg_bot.py / tg_upload.py = 兼容入口 shim
 conftest.py            # 让裸 pytest 也能从仓库根导入两个包
-ruff.toml              # ruff 配置：lint 只选 F/E9/W/B bug 类规则；整体排除 vendored 三件套
+ruff.toml              # ruff 配置：lint 只选 F/E9/W/B bug 类规则；整体排除 core/douyin_sign/
 setup_termux.sh        # Termux 首次使用配置脚本（仅 Termux 环境）
 tests/                 # pytest 单元测试（不联网），文件名与模块一一对应
 requirements.txt       # 依赖清单（requests / fake_useragent / beautifulsoup4 / curl_cffi / yt-dlp）
@@ -72,7 +68,7 @@ ruff format .                                        # 代码格式化（black �
 
 **`core/downloader.py`（yt-dlp 后端）。** `download_url` 采用两段式：先 `extract_info(download=False)` 探一次拿作者（`resolve_uploader` 取 `uploader` 并 `sanitize_filename` 清洗），再 `build_ydl_opts(site, author=...)` 构造选项后真正下载。代价是多一次请求；收益是作者缺失时自然退化为无作者层，不产生 `NA/` 或 `unknown/` 占位目录。cookiefile 仅当 `cookies/<site>.txt` 存在且非空时才传入。短链（`b23.tv`/`v.douyin.com`/`youtu.be`/`t.co`/`instagr.am`/`xhslink.com`）先经 `resolve_short_link` 用 http_client 展开为最终 URL——yt-dlp 走 Python socket 做 DNS，部分环境（沙箱、Termux）对短链域名解析失败，curl 自带解析器正常。yt-dlp 保持静默（`quiet`/`noprogress`），进度经 `progress_hooks` 转 logging。瞬时网络错误（SSL EOF、连接重置、超时、DNS 失败、502/503）由 `diagnose_error` 识别后整链退避重试最多 3 次；登录类错误翻译成"需登录 / Cookie 失效"提示；平台风控的确定性拦截归类 `blocked` 直接给出准确说明。**新增站点首选这个入口**——yt-dlp 已覆盖上千站点，通常只需在 `core/sites.py` 加映射。
 
-**抖音签名 detail API（2026-10-14 打通）。** `aweme/v1/web/aweme/detail/` 由 Argus 风控插件把守：缺签名一律 403 "Blocked by ArgusSecurityPlugin Uifid Not Found"（Cookie 完整也一样拦，yt-dlp 的 DouyinIE 即因此整拦、报误导性 "Fresh cookies needed"👉由 `diagnose_error` 归为 `blocked` 兜底提示）。页面侧无活路：视频页 pace_f 数据里 `"aweme": null`——视频详情不内嵌（笔记页内嵌，故图文走 HTML、视频只能走 API）；iesdouyin legacy 空响应、share 页纯壳、蜘蛛 UA 被 JS 墙拦。解法：**三件套纯本地签名**（算法移植自 Evil0ctal/Douyin_TikTok_Download_API，Apache-2.0，`douyin_abogus.py`/`douyin_sm3.py`/`douyin_websign.py` 头注有溯源）：a_bogus（bdms.js v1.0.1.19 逆向，SM3+RC4 变体）+ 伪 msToken（126 位随机串，服务端不校验）+ x-secsdk-web-signature（`md5(uifid_timestamp_盐_query)`，盐随 SDK 版本，**这是 "Uifid Not Found" 的对应物**）。签名素材就是 Cookie 里的 `UIFID`/`UIFID_TEMP`（websign 用它，**任意非空值即可**，服务端不校验内容）——但 2026-10-14 对照矩阵实测：仅 UIFID 仍返回 `200 空`，真正门禁是 **UIFID 签名 + 有效 ttwid 或 sessionid 至少其一**（`ttwid`/`sessionid` 的值会被校验，过期即 200 空；`s_v_web_id` 只随 query 的 verifyFp/fp 携带，服务端不校验，缺了也没事；ttwid 访客短期会过期，是"旧 Cookie 突然全 200 空"的常见原因；纯 HTTP 自助换 ttwid 需过 `__ac_signature` 挑战，未实现——刷新 Cookie 是正路）。封装在 `build_signed_detail_url`（拼接顺序与编码语义是命门：a_bogus 层 urlencode 编码后签，websign 先解码再按 JS URLSearchParams 语义整体重编码，签发的字节与发送的字节必须一致）；`fetch_aweme_detail` 重试瞬时错误与 2xx 非 JSON（`_NonJsonResponse`，日志带响应头部+指向刷 Cookie 的精确提示）、Argus 403 确定性拒绝不重试。底层风控若改版（盐/SDK 版本更新），三件套会整体失效，需对 Evil0ctal 上游重新同步。另注意：短间隔高频请求会把整个 douyin.com 的 HTML 链路打成 jsvm 挑战页（API 链路独立不受影响，故笔记页拦时自动改走 API 兜底），冷却后恢复。
+**抖音签名 detail API（2026-10-14 打通）。** `aweme/v1/web/aweme/detail/` 由 Argus 风控插件把守：缺签名一律 403 "Blocked by ArgusSecurityPlugin Uifid Not Found"（Cookie 完整也一样拦，yt-dlp 的 DouyinIE 即因此整拦、报误导性 "Fresh cookies needed"👉由 `diagnose_error` 归为 `blocked` 兜底提示）。页面侧无活路：视频页 pace_f 数据里 `"aweme": null`——视频详情不内嵌（笔记页内嵌，故图文走 HTML、视频只能走 API）；iesdouyin legacy 空响应、share 页纯壳、蜘蛛 UA 被 JS 墙拦。解法：**三件套纯本地签名**（算法移植自 Evil0ctal/Douyin_TikTok_Download_API，Apache-2.0，`core/douyin_sign/` 三件套头注有溯源）：a_bogus（bdms.js v1.0.1.19 逆向，SM3+RC4 变体）+ 伪 msToken（126 位随机串，服务端不校验）+ x-secsdk-web-signature（`md5(uifid_timestamp_盐_query)`，盐随 SDK 版本，**这是 "Uifid Not Found" 的对应物**）。签名素材就是 Cookie 里的 `UIFID`/`UIFID_TEMP`（websign 用它，**任意非空值即可**，服务端不校验内容）——但 2026-10-14 对照矩阵实测：仅 UIFID 仍返回 `200 空`，真正门禁是 **UIFID 签名 + 有效 ttwid 或 sessionid 至少其一**（`ttwid`/`sessionid` 的值会被校验，过期即 200 空；`s_v_web_id` 只随 query 的 verifyFp/fp 携带，服务端不校验，缺了也没事；ttwid 访客短期会过期，是"旧 Cookie 突然全 200 空"的常见原因；纯 HTTP 自助换 ttwid 需过 `__ac_signature` 挑战，未实现——刷新 Cookie 是正路）。封装在 `build_signed_detail_url`（拼接顺序与编码语义是命门：a_bogus 层 urlencode 编码后签，websign 先解码再按 JS URLSearchParams 语义整体重编码，签发的字节与发送的字节必须一致）；`fetch_aweme_detail` 重试瞬时错误与 2xx 非 JSON（`_NonJsonResponse`，日志带响应头部+指向刷 Cookie 的精确提示）、Argus 403 确定性拒绝不重试。底层风控若改版（盐/SDK 版本更新），三件套会整体失效，需对 Evil0ctal 上游重新同步。另注意：短间隔高频请求会把整个 douyin.com 的 HTML 链路打成 jsvm 挑战页（API 链路独立不受影响，故笔记页拦时自动改走 API 兜底），冷却后恢复。
 
 **`telegram/bot.py`（Telegram 机器人）。** 长轮询 `getUpdates`（走 http_client，Termux 降级路径可用），**下载核心零改动**：`dispatch_url` 调用前后对 `download/` 做快照比对（`snapshot_tree`/`group_new_files`）拿本批产物，按 `download/<站点>[/<作者>]/<标题>` 深度反推 site/author/title（作者层存在与否 = 目录深度），caption 经 `make_tag` 压成 `#作者 #站点` 单 token（Telegram 原生可搜）。白名单 `config.json` 的 `telegram.allowed_users` 为空则全拒（防白嫖，被拒消息回显用户 id 便于加白）。重复链接靠"快照无新文件"识别（下载器幂等跳过不落新盘）。串行处理、防重启重放（`initial_offset` 跳过离线积压）。上传复用 `telegram/upload.py` 的 `upload()`（`chat_id` 按消息来源覆盖配置默认）。**telegram/upload.py 与 telegram/bot.py 共用 config.json 的 telegram 段。**
 
@@ -90,12 +86,12 @@ ruff format .                                        # 代码格式化（black �
 
 **`core/utils.py`（共用工具）。** `setup_logging`（幂等）、`init_useragent`（fake_useragent 随机 UA，多采样探测不可用时降级固定 Chrome UA；仅 1024_downloader 使用）、`extract_urls`（从粘贴的分享文案中提取 URL，剔除尾部中文/标点）、`sanitize_filename`、`build_download_dir`（作者非空才加层，防御目录穿越）、`unique_path`（`O_CREAT|O_EXCL` 原子占位去重，并发不撞名）、`guess_extension`、`normalize_url`、`is_html_content`、`normalize_xhs_state_json`、`cookie_header_to_netscape`（把 `Cookie:` 请求头字符串转成 yt-dlp 可读的 Netscape 文件）、`cookie_text_to_header`（逆操作：Netscape 文件/请求头整段统一转回 `Cookie:` 头，douyin_downloader 用）。
 
-**`core/live_photo.py`（实况后处理，独立模块）。** 把小红书实况对儿（`001.heic`+`001.mp4`）打包为平台可用格式：`--android`（默认）把 HEIC 转 JPEG（pillow-heif，可选依赖——无 HEIC 时不需安装）+ MP4 mux 成 Motion Photo 单文件（`<stem>_motion.jpg`，双写 Camera + MicroVideo 两种 XMP，XMP 段必须紧跟 JPEG SOI 之后）；`--ios` 用 exiftool 写配对 ContentIdentifier 输出 `<stem>_ios.<原图扩展名>` + `<stem>_ios.mov`。华为的私有格式不支持。**注意**：被下载器完全解耦——不被 downloader/1024/xhs 任何模块 import，独立 CLI 使用。
+**`core/tools/live_photo.py`（实况后处理，独立模块）。** 把小红书实况对儿（`001.heic`+`001.mp4`）打包为平台可用格式：`--android`（默认）把 HEIC 转 JPEG（pillow-heif，可选依赖——无 HEIC 时不需安装）+ MP4 mux 成 Motion Photo 单文件（`<stem>_motion.jpg`，双写 Camera + MicroVideo 两种 XMP，XMP 段必须紧跟 JPEG SOI 之后）；`--ios` 用 exiftool 写配对 ContentIdentifier 输出 `<stem>_ios.<原图扩展名>` + `<stem>_ios.mov`。华为的私有格式不支持。**注意**：被下载器完全解耦——不被 downloader/1024/xhs 任何模块 import，独立 CLI 使用。
 
 ## 代码风格约定
 
 - Python 3，源码 UTF-8，带 `# -*- coding: utf-8 -*-` 头（部分老文件无此头，不必特意补）。
-- 格式由 `ruff format` 统一（black 兼容）；**vendored 签名三件套（douyin_abogus/douyin_sm3/douyin_websign）在 ruff.toml 里整体 exclude**，保持与 Evil0ctal 上游原样，便于风控改版后 diff 重新同步。
+- 格式由 `ruff format` 统一（black 兼容）；**vendored 签名三件套（`core/douyin_sign/` 三件套）在 ruff.toml 里整体 exclude**，保持与 Evil0ctal 上游原样，便于风控改版后 diff 重新同步。
 - 4 空格缩进；函数 `snake_case`；模块级常量 `UPPER_CASE`。
 - **注释和用户可见消息用中文**，修改既有代码时沿用。
 - 并发维持 `max_workers=5`，避免触发 IP 熔断。
@@ -114,7 +110,7 @@ pytest 是唯一框架，测试全部离线（不联网）。测试位于 `tests
 - `download/` 和 `cookies/` 都已 gitignore，**绝不提交**；不要打印 cookie 内容。
 - **两个入口的 cookie 格式不同**：yt-dlp 后端（core/downloader.py）要 Netscape cookie 文件（可用 `utils.cookie_header_to_netscape` 转换）；core/xhs_downloader 直接把文件内容塞进 `Cookie:` 请求头，要的是浏览器复制的请求头整段字符串。填错格式会被静默忽略或判定未登录（详见 README）。
 - douyin 图文/视频都由 douyin_downloader 消费同一文件：经 `cookie_text_to_header` 自动识别 Netscape 或 `Cookie:` 请求头整段两种格式——推荐统一填 Netscape（其他 yt-dlp 站点也兼容）；视频门禁要求 Cookie 含 `UIFID` + 有效 `ttwid`/`sessionid` 其一（2026-10-14 对照矩阵实测，`s_v_web_id` 服务端不校验；有效登录态天然齐全）。注意 yt-dlp 复用 cookiefile 时会回写该文件（jar resave），属预期行为。
-- `cookie_import.py` 是手机端恢复 Cookie 的推荐入口：stdin 自动识别 Cookie-Editor 的 JSON / `Cookie:` 请求头整段 / Netscape 三种导出（`detect_format`），按站点书面格式写文件——douyin/bilibili → Netscape（yt-dlp 可读），xiaohongshu → 请求头整段且 JSON 输入按域过滤第三方 cookie（`convert_to_site_format`）。Termux 用法：`termux-clipboard-get | python cookie_import.py <站点>`；桌面端可重定向扩展导出文件。
+- `core/tools/cookie_import.py` 是手机端恢复 Cookie 的推荐入口：stdin 自动识别 Cookie-Editor 的 JSON / `Cookie:` 请求头整段 / Netscape 三种导出（`detect_format`），按站点书面格式写文件——douyin/bilibili → Netscape（yt-dlp 可读），xiaohongshu → 请求头整段且 JSON 输入按域过滤第三方 cookie（`convert_to_site_format`）。Termux 用法：`termux-clipboard-get | python cookie_import.py <站点>`；桌面端可重定向扩展导出文件。
 - Pillow / pillow-heif 为可选依赖（requirements.txt 中注释列出）：缺 Pillow 时装饰过滤自动回退体积阈值，缺 pillow-heif 时 live_photo 不能转 HEIC。Termux 上 Pillow 无 Android wheel，用 `pkg install python-pillow`。
 
 ## 提交与 PR

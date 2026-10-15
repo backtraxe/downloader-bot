@@ -12,7 +12,7 @@ _TG_IMPORT = re.compile(r"^\s*(?:from|import)\s+telegram\b", re.M)
 def test_core_no_telegram_imports():
     offenders = [
         p.name
-        for p in CORE_DIR.glob("*.py")
+        for p in CORE_DIR.rglob("*.py")
         if _TG_IMPORT.search(p.read_text(encoding="utf-8"))
     ]
     assert not offenders, f"core 模块不得 import telegram 包: {offenders}"

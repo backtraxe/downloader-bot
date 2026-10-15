@@ -8,7 +8,7 @@
 
 import hashlib
 
-import core.douyin_websign as websign
+from core.douyin_sign import douyin_websign as websign
 
 
 class TestEncodePairs:

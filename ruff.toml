@@ -2,9 +2,9 @@
 # 移植自 Evil0ctal/Douyin_TikTok_Download_API，保持原样以便与上游 diff 重新同步
 target-version = "py313"
 extend-exclude = [
-    "core/douyin_abogus.py",
-    "core/douyin_sm3.py",
-    "core/douyin_websign.py",
+    "core/douyin_sign/douyin_abogus.py",
+    "core/douyin_sign/douyin_sm3.py",
+    "core/douyin_sign/douyin_websign.py",
 ]
 
 [lint]
