@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from utils import (
+from core.utils import (
     build_download_dir,
     cookie_header_to_netscape,
     cookie_list_to_header,
@@ -408,33 +408,33 @@ class TestExtractUrls:
     """从任意文本提取 URL 的测试：支持分享文案、多 URL、去重等。"""
 
     def test_pure_url(self):
-        from utils import extract_urls
+        from core.utils import extract_urls
         assert extract_urls("https://www.xiaohongshu.com/explore/abc") == \
             ["https://www.xiaohongshu.com/explore/abc"]
 
     def test_url_in_share_text(self):
-        from utils import extract_urls
+        from core.utils import extract_urls
         text = "6 发布了一篇小红线笔记 http://xhslink.com/o/abc 快来看"
         assert extract_urls(text) == ["http://xhslink.com/o/abc"]
 
     def test_strips_trailing_punctuation(self):
-        from utils import extract_urls
+        from core.utils import extract_urls
         assert extract_urls("看看 https://www.youtube.com/watch?v=abc。") == \
             ["https://www.youtube.com/watch?v=abc"]
 
     def test_strips_trailing_cjk(self):
-        from utils import extract_urls
+        from core.utils import extract_urls
         # 中文紧贴 URL 尾部，应被剔除
         assert extract_urls("http://xhslink.com/o/abc好棒") == \
             ["http://xhslink.com/o/abc"]
 
     def test_strips_trailing_fullwidth_punctuation(self):
-        from utils import extract_urls
+        from core.utils import extract_urls
         assert extract_urls("https://example.com/a）") == ["https://example.com/a"]
         assert extract_urls("https://example.com/a》") == ["https://example.com/a"]
 
     def test_multiple_urls(self):
-        from utils import extract_urls
+        from core.utils import extract_urls
         text = "https://x.com/a/status/1 https://twitter.com/b/status/2"
         assert extract_urls(text) == [
             "https://x.com/a/status/1",
@@ -442,36 +442,36 @@ class TestExtractUrls:
         ]
 
     def test_deduplicates_urls(self):
-        from utils import extract_urls
+        from core.utils import extract_urls
         text = "重复 https://example.com/a 再来 https://example.com/a"
         assert extract_urls(text) == ["https://example.com/a"]
 
     def test_no_url_returns_empty(self):
-        from utils import extract_urls
+        from core.utils import extract_urls
         assert extract_urls("今天天气真好") == []
         assert extract_urls("没有链接的纯文本") == []
 
     def test_empty_input(self):
-        from utils import extract_urls
+        from core.utils import extract_urls
         assert extract_urls("") == []
         assert extract_urls(None) == []
 
     def test_url_with_query_and_fragment(self):
-        from utils import extract_urls
+        from core.utils import extract_urls
         url = "https://www.xiaohongshu.com/explore/abc?xsec_token=CBc%3D&share=1#detail"
         assert extract_urls(url) == [url]
 
     def test_multiline_text(self):
-        from utils import extract_urls
+        from core.utils import extract_urls
         text = "https://example.com/a\nhttps://example.com/b"
         assert extract_urls(text) == ["https://example.com/a", "https://example.com/b"]
 
     def test_http_protocol(self):
-        from utils import extract_urls
+        from core.utils import extract_urls
         assert extract_urls("http://example.com/a") == ["http://example.com/a"]
 
     def test_preserves_order(self):
-        from utils import extract_urls
+        from core.utils import extract_urls
         text = "https://b.com/2 https://a.com/1"
         assert extract_urls(text) == ["https://b.com/2", "https://a.com/1"]
 
@@ -480,7 +480,7 @@ class TestCookieTextToHeader:
     """cookie_text_to_header：Netscape ↔ 请求头整段两种格式统一为 Cookie 头。"""
 
     def test_netscape_parsed(self):
-        from utils import cookie_text_to_header
+        from core.utils import cookie_text_to_header
         text = (
             "# Netscape HTTP Cookie File\n"
             ".douyin.com\tTRUE\t/\tTRUE\t4070908800\tsessionid\tf1e2d3\n"
@@ -490,21 +490,21 @@ class TestCookieTextToHeader:
 
     def test_roundtrip_with_header_to_netscape(self):
         # cookie_header_to_netscape 的输出应能无损逆转换回请求头
-        from utils import cookie_header_to_netscape, cookie_text_to_header
+        from core.utils import cookie_header_to_netscape, cookie_text_to_header
         header = "sessionid=f1e2d3; ttwid=1%7Cabc"
         assert cookie_text_to_header(cookie_header_to_netscape(header, ".douyin.com")) == header
 
     def test_header_string_passthrough(self):
         # 内容本身不是 Netscape（无 Tab 分隔字段）→ 原样作为请求头
-        from utils import cookie_text_to_header
+        from core.utils import cookie_text_to_header
         assert cookie_text_to_header("sessionid=f1e2d3; ttwid=abc") == "sessionid=f1e2d3; ttwid=abc"
 
     def test_comments_and_blank_lines_ignored(self):
-        from utils import cookie_text_to_header
+        from core.utils import cookie_text_to_header
         text = "# comment\n\n.douyin.com\tTRUE\t/\tTRUE\t4070908800\tttwid\tabc\n\n"
         assert cookie_text_to_header(text) == "ttwid=abc"
 
     def test_empty_returns_empty(self):
-        from utils import cookie_text_to_header
+        from core.utils import cookie_text_to_header
         assert cookie_text_to_header("") == ""
         assert cookie_text_to_header(None) == ""

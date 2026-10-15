@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""douyin_downloader.py 纯函数单元测试（无网络依赖）。
+"""core.douyin_downloader.py 纯函数单元测试（无网络依赖）。
 
 fixture 结构来自 2026 年真实 douyin.com/note 页面：
 - 新版 React Flight 页：详情在 self.__pace_f.push 流式数据块，
@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import pytest
 
-from douyin_downloader import (
+from core.douyin_downloader import (
     detect_jsvm_challenge,
     extract_aweme_detail,
     extract_douyin_author,
@@ -374,10 +374,10 @@ class TestFetchPageCaptchaRetry:
     _CAPTCHA = '<html><title>验证码中间页</title><script src="https://lf-cdn-tos.bytescm.com/obj/static/sec_sdk_build/3.5.2/captcha/index.js"></script></html>'
 
     def test_captcha_retried_until_pass(self, monkeypatch):
-        import douyin_downloader as dd
-        monkeypatch.setattr("douyin_downloader.time.sleep", lambda s: None)
+        import core.douyin_downloader as dd
+        monkeypatch.setattr("core.douyin_downloader.time.sleep", lambda s: None)
         session = self._FakeSession([self._CAPTCHA, self._CAPTCHA, "正常页面 __pace_f 数据"])
-        monkeypatch.setattr("douyin_downloader.http_client.Session", lambda: session)
+        monkeypatch.setattr("core.douyin_downloader.http_client.Session", lambda: session)
         r = dd._fetch_page(session, "https://www.douyin.com/note/123", {})
         assert r is not None
         assert "__pace_f" in r.text
@@ -385,10 +385,10 @@ class TestFetchPageCaptchaRetry:
 
     def test_captcha_exhausted_returns_last_response(self, monkeypatch):
         # 重试用尽仍全命中：返回最后响应（由调用方给出限流提示），不返回 None
-        import douyin_downloader as dd
-        monkeypatch.setattr("douyin_downloader.time.sleep", lambda s: None)
+        import core.douyin_downloader as dd
+        monkeypatch.setattr("core.douyin_downloader.time.sleep", lambda s: None)
         session = self._FakeSession([self._CAPTCHA] * 5)
-        monkeypatch.setattr("douyin_downloader.http_client.Session", lambda: session)
+        monkeypatch.setattr("core.douyin_downloader.http_client.Session", lambda: session)
         r = dd._fetch_page(session, "https://www.douyin.com/note/123", {})
         assert r is not None
         assert "验证码中间页" in r.text
@@ -428,8 +428,8 @@ class TestFetchAwemeDetail:
         return self._Resp(text, status)
 
     def _run(self, monkeypatch, session):
-        import douyin_downloader as dd
-        monkeypatch.setattr("douyin_downloader.time.sleep", lambda s: None)
+        import core.douyin_downloader as dd
+        monkeypatch.setattr("core.douyin_downloader.time.sleep", lambda s: None)
         return dd.fetch_aweme_detail("7691296880559540623", "ttwid=x", session)
 
     def test_success(self, monkeypatch):
@@ -509,7 +509,7 @@ class TestIsDouyinVideoUrl:
         "http://douyin.com/video/12345",
     ])
     def test_video_urls(self, url):
-        from douyin_downloader import is_douyin_video_url
+        from core.douyin_downloader import is_douyin_video_url
         assert is_douyin_video_url(url) is True
 
     @pytest.mark.parametrize("url", [
@@ -520,7 +520,7 @@ class TestIsDouyinVideoUrl:
         None,
     ])
     def test_non_video_urls(self, url):
-        from douyin_downloader import is_douyin_video_url
+        from core.douyin_downloader import is_douyin_video_url
         assert is_douyin_video_url(url) is False
 
 
@@ -533,7 +533,7 @@ class TestBuildSignedDetailUrl:
     _COOKIES = {"UIFID_TEMP": "uid_test_123", "s_v_web_id": "verify_test_x"}
 
     def _url_and_headers(self):
-        from douyin_downloader import build_signed_detail_url
+        from core.douyin_downloader import build_signed_detail_url
         return build_signed_detail_url("7556303777536740671", self._COOKIES)
 
     def test_carries_required_params(self):
@@ -563,7 +563,7 @@ class TestBuildSignedDetailUrl:
         assert marker in query
         body, sig = query.rsplit(marker, 1)
         ts = dict(p.split("=", 1) for p in body.split("&")).get("timestamp")
-        from douyin_websign import SALT
+        from core.douyin_websign import SALT
         expected = hashlib.md5(
             f"uid_test_123_{ts}_{SALT}_{body}".encode()).hexdigest()
         assert sig == expected
@@ -573,7 +573,7 @@ class TestBuildSignedDetailUrl:
 
     def test_missing_uifid_falls_back_to_unsigned(self):
         # 没有 UIFID 时仍给出 a_bogus 签名 URL（未保护端点可用），但不伪造 websign
-        from douyin_downloader import build_signed_detail_url
+        from core.douyin_downloader import build_signed_detail_url
         url, extra_headers = build_signed_detail_url("1", {"s_v_web_id": "x"})
         assert "a_bogus=" in url
         assert "x-secsdk-web-signature=" not in url
@@ -584,7 +584,7 @@ class TestExtractVideoPlayUrls:
     """视频直链候选：play_addr 无水印优先，过滤 playwm，bit_rate 兜底。"""
 
     def test_play_addr_url_list_in_order(self):
-        from douyin_downloader import extract_video_play_urls
+        from core.douyin_downloader import extract_video_play_urls
         video = {"play_addr": {"url_list": [
             "https://v26-web.douyinvod.com/a",
             "https://www.douyin.com/aweme/v1/play/?x",
@@ -595,7 +595,7 @@ class TestExtractVideoPlayUrls:
         ]
 
     def test_watermark_candidates_filtered(self):
-        from douyin_downloader import extract_video_play_urls
+        from core.douyin_downloader import extract_video_play_urls
         video = {"play_addr": {"url_list": [
             "https://a.example.com/playwm/x",
             "https://v26-web.douyinvod.com/clean",
@@ -604,7 +604,7 @@ class TestExtractVideoPlayUrls:
             "https://v26-web.douyinvod.com/clean"]
 
     def test_falls_back_to_bit_rate(self):
-        from douyin_downloader import extract_video_play_urls
+        from core.douyin_downloader import extract_video_play_urls
         video = {
             "play_addr": {"url_list": []},
             "bit_rate": [
@@ -615,6 +615,6 @@ class TestExtractVideoPlayUrls:
         assert extract_video_play_urls(video) == ["https://v9.example.com/hd"]
 
     def test_empty_video_returns_empty(self):
-        from douyin_downloader import extract_video_play_urls
+        from core.douyin_downloader import extract_video_play_urls
         assert extract_video_play_urls({}) == []
         assert extract_video_play_urls(None) == []

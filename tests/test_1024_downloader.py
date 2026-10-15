@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-mod = importlib.import_module("1024_downloader")
+mod = importlib.import_module("core.1024_downloader")
 
 
 # ---------------- _is_block_status ----------------

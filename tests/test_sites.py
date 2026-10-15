@@ -2,7 +2,7 @@
 """sites.py 站点识别单元测试"""
 import pytest
 
-from sites import SITE_REQUIRE_COOKIE, cookie_file_for, get_site_name
+from core.sites import SITE_REQUIRE_COOKIE, cookie_file_for, get_site_name
 
 
 class TestGetSiteName:

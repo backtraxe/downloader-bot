@@ -2,7 +2,7 @@
 """http_client.py 纯函数单元测试（无网络）。"""
 import pytest
 
-from http_client import (
+from core.http_client import (
     CurlResponse,
     _build_curl_args,
     _parse_response_blocks,

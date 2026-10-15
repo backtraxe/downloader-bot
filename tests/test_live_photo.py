@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-import live_photo as lp
+import core.live_photo as lp
 
 
 def _make_jpeg(w=64, h=64):

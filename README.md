@@ -101,7 +101,7 @@ yt-dlp 的 `cookiefile` 读取的是 **Netscape cookie 文件**（每行一个 c
 3. **从抓包/手头的 `Cookie:` 头字符串转换**：若你只有请求头字符串（移动端抓包常见），用本仓库自带的转换函数生成 Netscape 文件：
 
    ```bash
-   python -c "from utils import cookie_header_to_netscape as f; f('SESSDATA=abc; bili_jct=xyz', '.bilibili.com', 'cookies/bilibili.txt')"
+   python -c "from core.utils import cookie_header_to_netscape as f; f('SESSDATA=abc; bili_jct=xyz', '.bilibili.com', 'cookies/bilibili.txt')"
    ```
 
 > ⚠️ 填了 `Cookie:` 头字符串会导致 yt-dlp **静默忽略** cookie，下载受限内容仍报“需要登录”。
@@ -186,7 +186,7 @@ iOS 没有 DevTools，也**无法**用“快捷指令”读取 Safari 的 Cookie
 
 ## 上传到 Telegram（可选）
 
-两个工具，共用同一份 `telegram.json` 配置（已 gitignore）：
+**两种使用形态**：不配置 `telegram.json` 时，仓库就是纯本地命令行下载器；配置后即可用下面两个 Telegram 工具（共用同一份配置，已 gitignore）。代码也按此分层：下载核心在 `core/`，Telegram 功能在 `telegram/`（仅依赖 core，单向），根目录 `downloader.py` / `tg_bot.py` 等脚本是兼容入口 shim。
 
 - **`tg_bot.py` — 聊天闭环机器人（Termux 常驻）**：给 bot 发链接（可带分享文案），自动下载并把产物回传到聊天——图片按 10 张/组发相册，视频发 video，HEIC/原图走文件；caption 自动带 **`#作者` `#站点`** 标签（Telegram 原生可点击、可搜索，方便按作者翻记录）。重复链接提示"已下载过"，超限文件提示跳过。`allowed_users` 白名单外的用户不会消耗你的下载（被拒时会回显其用户 id，方便加白）
 - **`tg_upload.py` — 命令行直发**：把本地已有目录/文件传上去（`--document` 原图不压缩，`--caption` 自定义说明，`--config` 指定配置）
@@ -221,10 +221,8 @@ curl_cffi 核心是编译好的 C 扩展，PyPI 只发 glibc/macOS/Windows 的�
 
 ```bash
 pip install pytest
-python -m pytest -q
+python -m pytest -q    # 裸 pytest -q 亦可（根目录 conftest.py 引导 sys.path）
 ```
-
-裸 `pytest -q` 不会把项目根加入 `sys.path`，会因 `ModuleNotFoundError` 收集失败，统一用 `python -m pytest -q`。
 
 ## License
 

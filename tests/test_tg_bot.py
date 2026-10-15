@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""tg_bot.py 纯函数与消息流测试（假 dispatch + 假 session，不联网）"""
+"""telegram/bot.py 纯函数与消息流测试（假 dispatch + 假 session，不联网）"""
 import json
 import os
 
-from tg_bot import (
+from telegram.bot import (
     build_caption,
     group_new_files,
     handle_message,

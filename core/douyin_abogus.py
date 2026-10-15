@@ -84,7 +84,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final
 
-from douyin_sm3 import sm3_to_array
+from .douyin_sm3 import sm3_to_array
 
 #: The five alphabets ``bdms.js`` carries. Only two are reachable from here:
 #: ``s4`` encodes the finished signature, ``s3`` encodes the User-Agent on its

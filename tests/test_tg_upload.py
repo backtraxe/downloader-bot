@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""tg_upload.py 纯函数与流程测试（假 session，不联网）"""
+"""telegram/upload.py 纯函数与流程测试（假 session，不联网）"""
 import json
 import os
 
 import pytest
 
-from tg_upload import (
+from telegram.upload import (
     TgError,
     call_api,
     collect_media,
@@ -127,15 +127,15 @@ class TestCollectAndPlan:
 
 class TestCallApi:
     def test_429_retried_with_retry_after(self, monkeypatch):
-        monkeypatch.setattr("tg_upload.time.sleep", lambda s: None)
+        monkeypatch.setattr("telegram.upload.time.sleep", lambda s: None)
         s = _Session([
             {"ok": False, "error_code": 429,
              "description": "Too Many Requests",
              "parameters": {"retry_after": 1}},
             {"ok": True, "result": {"message_id": 7}},
         ])
-        import tg_upload
-        result = tg_upload.call_api(s, _CFG, "sendPhoto", {},
+        from telegram import upload as upload_mod
+        result = upload_mod.call_api(s, _CFG, "sendPhoto", {},
                                     _sleep=lambda x: None)
         assert result == {"message_id": 7}
         assert len(s.calls) == 2

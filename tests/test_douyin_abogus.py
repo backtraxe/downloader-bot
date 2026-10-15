@@ -9,7 +9,7 @@ import random
 
 import pytest
 
-from douyin_abogus import ABogus, PAGE_ID, AID
+from core.douyin_abogus import ABogus, PAGE_ID, AID
 
 _FIXED_MS = 1791914678000
 # ABogus("test-ua", rng=Random(42)).get_value("aweme_id=1&aid=6383",
