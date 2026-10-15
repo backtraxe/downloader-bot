@@ -20,10 +20,12 @@ logger = logging.getLogger("downloader")
 
 # curl_cffi 是否可用——全局探测一次
 try:
+    from curl_cffi import CurlMime
     from curl_cffi import requests as _cffi_requests
 
     _HAS_CURL_CFFI = True
 except Exception as _cffi_err:  # noqa: BLE001
+    CurlMime = None
     _cffi_requests = None
     _HAS_CURL_CFFI = False
     logger.warning("curl_cffi 不可用，降级为系统 curl 命令。原因: %s", _cffi_err)
@@ -179,18 +181,22 @@ class Session:
     def post_files(self, url, data=None, files=None, headers=None, timeout=60):
         """multipart/form-data POST（上传用）。files 为 {字段名: 本地文件路径}。
 
-        curl_cffi 路径把文件读入内存后按 (filename, bytes) 交给它；
-        降级路径翻译成等价的 `curl -F field=@path`。
+        curl_cffi 路径经 CurlMime 拼装（它不支持 requests 式 files=，
+        文件读入内存并带文件名）；降级路径翻译成等价的 `curl -F field=@path`。
         """
         if self._cffi is not None:
-            cffi_files = None
-            if files:
-                cffi_files = {}
-                for field, path in files.items():
-                    with open(path, "rb") as f:
-                        cffi_files[field] = (os.path.basename(path), f.read())
+            # curl_cffi 不支持 requests 式 files=（报 "files is not supported"），
+            # 必须用 CurlMime 逐段拼装：data 为字节段，文件读入内存并带文件名
+            mime = CurlMime()
+            for k, v in (data or {}).items():
+                mime.addpart(name=k, data=str(v).encode("utf-8"))
+            for field, path in (files or {}).items():
+                with open(path, "rb") as f:
+                    mime.addpart(
+                        name=field, filename=os.path.basename(path), data=f.read()
+                    )
             return self._cffi.post(
-                url, data=data or {}, files=cffi_files, headers=headers, timeout=timeout
+                url, multipart=mime, headers=headers, timeout=timeout
             )
         flags = []
         for k, v in (data or {}).items():

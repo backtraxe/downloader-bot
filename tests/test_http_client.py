@@ -139,3 +139,42 @@ class TestBuildCurlArgs:
         # 系统 curl 默认不跟随 30x，必须显式 -L，否则短链/跳转场景直接拿到空 301 body
         args = _build_curl_args("http://x", "GET", {}, 15, None, False)
         assert "-L" in args
+
+
+# ---------------- Session.post_files ----------------
+
+
+class TestPostFiles:
+    """curl_cffi 路径必须用 CurlMime 拼装——它不支持 requests 式 files=（真实事故）。"""
+
+    def test_uses_multipart_not_files_kwarg(self, tmp_path):
+        pytest.importorskip("curl_cffi")
+        from core import http_client
+
+        captured = {}
+
+        class _StubCffi:
+            def post(self, url, **kwargs):
+                captured.update(kwargs)
+
+                class _R:
+                    status_code = 200
+                    text = "{}"
+
+                return _R()
+
+        s = http_client.Session()
+        s._cffi = _StubCffi()
+        f = tmp_path / "a.jpg"
+        f.write_bytes(b"\xff\xd8\xff")
+
+        s.post_files(
+            "https://api.telegram.org/x",
+            data={"chat_id": 1},
+            files={"document": str(f)},
+            timeout=30,
+        )
+
+        assert "files" not in captured
+        assert captured["multipart"] is not None
+        assert captured["timeout"] == 30
