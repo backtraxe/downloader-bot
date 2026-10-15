@@ -14,9 +14,9 @@ xiaohongshu 写 `Cookie:` 请求头整段（手写解析器塞请求头用）。
     pip install playwright && playwright install chromium
 
 用法：
-    python cookie_login.py douyin                 # 无头 + 终端输验证码
-    python cookie_login.py xiaohongshu --headed   # 弹窗，手动登录兜底
-    python cookie_login.py bilibili --browser-path /path/to/chromium
+    python -m core.tools.cookie_login douyin                 # 无头 + 终端输验证码
+    python -m core.tools.cookie_login xiaohongshu --headed   # 弹窗，手动登录兜底
+    python -m core.tools.cookie_login bilibili --browser-path /path/to/chromium
 """
 
 import argparse
@@ -237,7 +237,8 @@ def _save_cookie(cookies, site):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="半自动登录刷新 cookies/<站点>.txt（手机号 + 短信验证码）"
+        prog="python -m core.tools.cookie_login",
+        description="半自动登录刷新 cookies/<站点>.txt（手机号 + 短信验证码）",
     )
     parser.add_argument("site", choices=sorted(_SITES), help="要登录的站点")
     parser.add_argument(

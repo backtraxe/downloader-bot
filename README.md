@@ -12,10 +12,10 @@ pip install -r requirements.txt
 
 ## 使用
 
-### `downloader.py` — 统一入口（推荐）
+### 统一入口 core/downloader.py（推荐）
 
 ```bash
-python downloader.py
+python -m core.downloader
 ```
 
 输入链接后脚本按 URL 自动识别站点并分发到对应下载器，无需手动选脚本：
@@ -36,7 +36,7 @@ python downloader.py
 - 通用抓取会自动过滤站点装饰图（logo/头像/二维码/表情等）：文件名含装饰关键词的直接跳过，尺寸过小（短边 <300px）的落盘后删除
 - 短链（`b23.tv` / `v.douyin.com` / `youtu.be` / `t.co` / `instagr.am` 等）会自动展开为最终直链后再下载，避免 DNS 解析失败
 
-三个站点下载脚本也可单独运行（`python xhs_downloader.py` / `python douyin_downloader.py` / `python 1024_downloader.py`），行为与统一入口一致。
+三个站点下载脚本也可单独运行（`python -m core.xhs_downloader` / `python -m core.douyin_downloader` / `python -m core.1024_downloader`），行为与统一入口一致。
 
 #### 小红书后端
 
@@ -46,10 +46,10 @@ python downloader.py
 - 需要在 `cookies/xiaohongshu.txt` 中填入浏览器 Cookie；文件不存在或为空时脚本会自动创建并提示
 - 实况照片（live photo）按"静态原图 + 实况视频"同序号配对下载（`001.heic` + `001.mp4`），静态图为 HEIF/JPEG 原图、视频按画质选最高档
 
-**实况照片后处理（`live_photo.py`，独立模块）**：把下载好的实况对儿转成手机相册可用的实况格式。
+**实况照片后处理（core/tools/live_photo.py，独立模块）**：把下载好的实况对儿转成手机相册可用的实况格式。
 
 ```bash
-python live_photo.py "download/xiaohongshu/<作者>/<标题>_<noteId>"
+python -m core.tools.live_photo "download/xiaohongshu/<作者>/<标题>_<noteId>"
 ```
 
 - 默认生成 Android 侧 Motion Photo 单文件（`<stem>_motion.jpg`，JPEG 内嵌 MP4），小米/OPPO/Google Photos/三星相册可识别为动态照片；HEIC 静态帧自动转 JPEG（依赖 `pillow-heif`，已在 `requirements.txt`）
@@ -107,7 +107,7 @@ yt-dlp 的 `cookiefile` 读取的是 **Netscape cookie 文件**（每行一个 c
 
 > ⚠️ 填了 `Cookie:` 头字符串会导致 yt-dlp **静默忽略** cookie，下载受限内容仍报“需要登录”。
 
-### `xhs_downloader.py` — Cookie 请求头字符串
+### core/xhs_downloader.py — Cookie 请求头字符串
 
 `xhs_downloader.py` 把文件内容原样塞进 HTTP `Cookie` 请求头，因此需要的是浏览器 DevTools 里复制的 **`Cookie:` 头整段字符串**：
 
@@ -157,13 +157,13 @@ iOS 没有 DevTools，也**无法**用“快捷指令”读取 Safari 的 Cookie
 3. Termux 里一条命令写入（格式识别 + 站点格式转换由 `cookie_import.py` 完成）：
 
    ```bash
-   termux-clipboard-get | python cookie_import.py douyin
-   termux-clipboard-get | python cookie_import.py xiaohongshu
-   termux-clipboard-get | python cookie_import.py bilibili
+   termux-clipboard-get | python -m core.tools.cookie_import douyin
+   termux-clipboard-get | python -m core.tools.cookie_import xiaohongshu
+   termux-clipboard-get | python -m core.tools.cookie_import bilibili
    ```
 
    桌面端也通用，把扩展导出的文件重定向即可：
-   `python cookie_import.py bilibili < ~/Downloads/cookies.txt`
+   `python -m core.tools.cookie_import bilibili < ~/Downloads/cookies.txt`
 
 说明：
 
@@ -176,8 +176,8 @@ iOS 没有 DevTools，也**无法**用“快捷指令”读取 Safari 的 Cookie
 不想手动导 Cookie 时，用 Playwright 半自动登录刷新（需 `pip install playwright && playwright install chromium`）：
 
 ```bash
-python cookie_login.py douyin                 # 无头自动完成到「输入短信验证码」，终端输入即可
-python cookie_login.py xiaohongshu --headed   # 遇滑块/人机校验时弹窗手动完成（可扫码）
+python -m core.tools.cookie_login douyin                 # 无头自动完成到「输入短信验证码」，终端输入即可
+python -m core.tools.cookie_login xiaohongshu --headed   # 遇滑块/人机校验时弹窗手动完成（可扫码）
 ```
 
 登录成功后自动按站点所需格式写入 `cookies/<站点>.txt`，支持 douyin / xiaohongshu / bilibili。
@@ -198,10 +198,10 @@ python cookie_login.py xiaohongshu --headed   # 遇滑块/人机校验时弹窗�
 
 ## 上传到 Telegram（可选）
 
-**两种使用形态**：不把 Telegram 配置（config.json 的 telegram 段）填上时，仓库就是纯本地命令行下载器；配置后即可用下面两个 Telegram 工具（共用 config.json 的 telegram 段，已 gitignore）。代码也按此分层：下载核心在 `core/`，Telegram 功能在 `telegram/`（仅依赖 core，单向），根目录 `downloader.py` / `tg_bot.py` 等脚本是兼容入口 shim。
+**两种使用形态**：不把 Telegram 配置（config.json 的 telegram 段）填上时，仓库就是纯本地命令行下载器；配置后即可用下面两个 Telegram 工具（共用 config.json 的 telegram 段，已 gitignore）。代码也按此分层：下载核心在 `core/`，Telegram 功能在 `telegram/`（仅依赖 core，单向），入口一律 `python -m 模块路径`（如 `python -m core.downloader`、`python -m telegram.bot`），无 shim 文件。
 
-- **`tg_bot.py` — 聊天闭环机器人（Termux 常驻）**：给 bot 发链接（可带分享文案），自动下载并把产物回传到聊天——图片按 10 张/组发相册，视频发 video，HEIC/原图走文件；caption 自动带 **`#作者` `#站点`** 标签（Telegram 原生可点击、可搜索，方便按作者翻记录）。重复链接提示"已下载过"，超限文件提示跳过。`allowed_users` 白名单外的用户不会消耗你的下载（被拒时会回显其用户 id，方便加白）
-- **`tg_upload.py` — 命令行直发**：把本地已有目录/文件传上去（`--document` 原图不压缩，`--caption` 自定义说明，`--config` 指定配置）
+- **`telegram/bot.py` — 聊天闭环机器人（Termux 常驻）**：给 bot 发链接（可带分享文案），自动下载并把产物回传到聊天——图片按 10 张/组发相册，视频发 video，HEIC/原图走文件；caption 自动带 **`#作者` `#站点`** 标签（Telegram 原生可点击、可搜索，方便按作者翻记录）。重复链接提示"已下载过"，超限文件提示跳过。`allowed_users` 白名单外的用户不会消耗你的下载（被拒时会回显其用户 id，方便加白）
+- **`telegram/upload.py` — 命令行直发**：把本地已有目录/文件传上去（`--document` 原图不压缩，`--caption` 自定义说明，`--config` 指定配置）
 
 **配置步骤**（一次，终身有效）：
 
@@ -216,9 +216,9 @@ python cookie_login.py xiaohongshu --headed   # 遇滑块/人机校验时弹窗�
 
 ```bash
 tmux new -s tg      # 常驻推荐
-python tg_bot.py    # 机器人模式：等消息
+python -m telegram.bot      # 机器人模式：等消息
 # 或
-python tg_upload.py download/xiaohongshu/某作者/某笔记_xxx/   # 直发模式
+python -m telegram.upload download/xiaohongshu/某作者/某笔记_xxx/   # 直发模式
 ```
 
 限制：官方 Bot API 上传单文件 **≤50MB**（超限自动跳过并提示）；图片 >10MB 自动改按文件发送；实况照片的 `.heic` 一律按文件发送保原图。需要 ≤2GB 就得自建 telegram-bot-api 服务，不在本仓库范围。

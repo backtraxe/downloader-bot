@@ -13,13 +13,13 @@
   用户 id 的提示，不消耗下载
 - 串行处理：一次一条链接，多余消息在 Telegram 服务端排队
 
-配置（config.json 的 telegram 段，已 gitignore，首跑 tg_upload.py / 本脚本生成模板）：
+配置（config.json 的 telegram 段，已 gitignore，首跑 telegram/upload.py / 本脚本生成模板）：
   bot_token     @BotFather 给的 token
   chat_id       tg_upload 直发模式默认聊天；bot 模式按消息来源回复
   allowed_users 允许使用的用户 id 列表
 
 运行（建议 tmux 常驻）：
-    python tg_bot.py
+    python -m telegram.bot
 """
 
 import logging

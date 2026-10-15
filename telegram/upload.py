@@ -9,9 +9,9 @@
   3. 填入 config.json 的 telegram 段（首跑自动生成模板与上述指引，已 gitignore）
 
 用法：
-    python tg_upload.py <文件或目录>            # 目录：图片按 10 张/组发相册
-    python tg_upload.py <目标> --document      # 全部按"文件"发送（原图不压缩）
-    python tg_upload.py <目标> --caption 标题
+    python -m telegram.upload <文件或目录>            # 目录：图片按 10 张/组发相册
+    python -m telegram.upload <目标> --document      # 全部按"文件"发送（原图不压缩）
+    python -m telegram.upload <目标> --caption 标题
 
 限制：Bot API 上传单文件 ≤50MB；图片 >10MB 自动改按文件发送（Telegram
 photo 上限）；超限走自建 telegram-bot-api（2GB）不在本脚本范围。
@@ -214,7 +214,8 @@ def upload(session, cfg, target, document=False, caption=None, chat_id=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="把 download/ 产物上传到 Telegram（Bot API）"
+        prog="python -m telegram.upload",
+        description="把 download/ 产物上传到 Telegram（Bot API）",
     )
     parser.add_argument("target", help="文件或目录")
     parser.add_argument(

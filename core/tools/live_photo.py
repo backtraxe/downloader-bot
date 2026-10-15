@@ -3,7 +3,7 @@
 
 独立于下载器本体（utils/1024/xhs/downloader 不依赖本模块），使用方法：
 
-    python live_photo.py <live_photo目录> [--android] [--ios]
+    python -m core.tools.live_photo <live_photo目录> [--android] [--ios]
 
 产物：
   --android（默认开）  在源目录下生成 <stem>_motion.jpg——Google Motion Photo
@@ -193,7 +193,8 @@ def process_ios(image_path, video_path, out_dir=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="把实况照片对打包成平台可用格式（Android Motion Photo / iOS 配对元数据）"
+        prog="python -m core.tools.live_photo",
+        description="把实况照片对打包成平台可用格式（Android Motion Photo / iOS 配对元数据）",
     )
     parser.add_argument("directory", help="实况照片目录（含 001.heic+001.mp4 等对儿）")
     parser.add_argument(

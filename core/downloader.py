@@ -9,7 +9,7 @@
   - 其他站点 → 1024_downloader（通用静态网页抓取）
 
 用法：
-    python downloader.py
+    python -m core.downloader
 然后反复输入链接下载，输入 q 退出。
 """
 

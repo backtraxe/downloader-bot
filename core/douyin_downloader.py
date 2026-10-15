@@ -525,8 +525,8 @@ def fetch_aweme_detail(aweme_id, cookie, session, max_retries=3):
                     "detail API 持续返回空响应：Cookie 缺有效会话凭据——"
                     "实测门禁 = UIFID（签名用）+ 有效 ttwid 或 sessionid "
                     "至少其一，ttwid 过期正是这种形态。请刷新 Cookie："
-                    "手机端 termux-clipboard-get | python "
-                    "cookie_import.py douyin"
+                    "手机端 termux-clipboard-get | python -m "
+                    "core.tools.cookie_import douyin"
                 )
             return None
         status = data.get("status_code")

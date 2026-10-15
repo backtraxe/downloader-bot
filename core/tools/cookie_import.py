@@ -9,9 +9,9 @@
         xiaohongshu → `Cookie:` 请求头整段（手写解析器塞请求头用）
 
 Termux 典型用法（配合 Termux:API，扩展导出复制到剪贴板后一条命令）：
-    termux-clipboard-get | python cookie_import.py douyin
+    termux-clipboard-get | python -m core.tools.cookie_import douyin
 桌面端也可把扩展导出的文件直接喂进来：
-    python cookie_import.py bilibili < ~/Downloads/cookies.txt
+    python -m core.tools.cookie_import bilibili < ~/Downloads/cookies.txt
 """
 
 import argparse
@@ -102,8 +102,9 @@ def convert_to_site_format(text, site):
 
 def main():
     parser = argparse.ArgumentParser(
+        prog="python -m core.tools.cookie_import",
         description="把 stdin 的 Cookie 文本（JSON / Cookie头 / Netscape "
-        "自动识别）按站点所需格式写入 cookies/<站点>.txt"
+        "自动识别）按站点所需格式写入 cookies/<站点>.txt",
     )
     parser.add_argument("site", choices=sorted(_SITES), help="目标站点")
     args = parser.parse_args()

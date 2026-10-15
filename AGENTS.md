@@ -6,7 +6,7 @@
 
 README 是本仓库的权威使用文档（中文，与当前代码一致）。历史上曾有的旧 Telegram bot（`main.py`、`config.py`、`src/`）早已删除；现在的 `telegram/` 目录是后来重新实现的另一套，不要按旧架构理解本仓库。
 
-仓库没有 `pyproject.toml` / `setup.py`，不是可安装的包——代码分两个 sys.path 包：`core/`（下载核心）与 `telegram/`（机器人功能，仅依赖 core，单向）。边界纪律：core 绝不 import telegram（`tests/test_module_boundary.py` 固化）；telegram 对 core 的契约只有 `dispatch_url` / `http_client` / `utils`。根目录 `downloader.py`、`xhs_downloader.py`、`tg_bot.py` 等让用户命令保持不变的文件全部是 5 行兼容 shim——**改功能去 core/ 或 telegram/ 改，别改 shim**。**脚本和测试都必须在项目根目录运行**（`cookies/`、`download/`、`config.json` 均为 CWD 相对路径）。
+仓库没有 `pyproject.toml` / `setup.py`，不是可安装的包——代码分两个 sys.path 包：`core/`（下载核心）与 `telegram/`（机器人功能，仅依赖 core，单向）。边界纪律：core 绝不 import telegram（`tests/test_module_boundary.py` 固化）；telegram 对 core 的契约只有 `dispatch_url` / `http_client` / `utils`。入口统一 `python -m 模块路径`（`python -m core.downloader` 统一下载、`python -m telegram.bot` 机器人等），根目录无脚本 shim——**改功能直接改 core/ 或 telegram/ 里的对应模块**。**脚本和测试都必须在项目根目录运行**（`cookies/`、`download/`、`config.json` 均为 CWD 相对路径）。
 
 ## 项目结构
 
@@ -25,8 +25,7 @@ core/
 telegram/
   bot.py               # Telegram 机器人（长轮询常驻）：聊天发链接→dispatch_url 下载→产物回传，caption 打 #作者 #站点 标签
   upload.py            # Telegram 直发（Bot API）：目录→10 张/组相册，HEIC/大图走 document；读 config.json 的 telegram 段
-根目录 downloader.py / xhs_downloader.py / douyin_downloader.py / 1024_downloader.py /
-live_photo.py / cookie_import.py / cookie_login.py / tg_bot.py / tg_upload.py = 兼容入口 shim
+入口统一 python -m 模块路径（python -m core.downloader / python -m telegram.bot 等）
 conftest.py            # 让裸 pytest 也能从仓库根导入两个包
 ruff.toml              # ruff 配置：lint 只选 F/E9/W/B bug 类规则；整体排除 core/douyin_sign/
 setup_termux.sh        # Termux 首次使用配置脚本（仅 Termux 环境）
@@ -45,7 +44,7 @@ python -m venv .venv && source .venv/bin/activate   # 可选但推荐
 pip install -r requirements.txt
 pip install pytest
 python -m pytest -q                                  # 单元测试，全部离线
-python downloader.py                                 # 统一入口，按 URL 自动路由
+python -m core.downloader                            # 统一入口，按 URL 自动路由
 ruff check .                                         # 静态检查（先 pip install ruff）
 ruff format .                                        # 代码格式化（black 兼容）
 ```
@@ -110,7 +109,7 @@ pytest 是唯一框架，测试全部离线（不联网）。测试位于 `tests
 - `download/` 和 `cookies/` 都已 gitignore，**绝不提交**；不要打印 cookie 内容。
 - **两个入口的 cookie 格式不同**：yt-dlp 后端（core/downloader.py）要 Netscape cookie 文件（可用 `utils.cookie_header_to_netscape` 转换）；core/xhs_downloader 直接把文件内容塞进 `Cookie:` 请求头，要的是浏览器复制的请求头整段字符串。填错格式会被静默忽略或判定未登录（详见 README）。
 - douyin 图文/视频都由 douyin_downloader 消费同一文件：经 `cookie_text_to_header` 自动识别 Netscape 或 `Cookie:` 请求头整段两种格式——推荐统一填 Netscape（其他 yt-dlp 站点也兼容）；视频门禁要求 Cookie 含 `UIFID` + 有效 `ttwid`/`sessionid` 其一（2026-10-14 对照矩阵实测，`s_v_web_id` 服务端不校验；有效登录态天然齐全）。注意 yt-dlp 复用 cookiefile 时会回写该文件（jar resave），属预期行为。
-- `core/tools/cookie_import.py` 是手机端恢复 Cookie 的推荐入口：stdin 自动识别 Cookie-Editor 的 JSON / `Cookie:` 请求头整段 / Netscape 三种导出（`detect_format`），按站点书面格式写文件——douyin/bilibili → Netscape（yt-dlp 可读），xiaohongshu → 请求头整段且 JSON 输入按域过滤第三方 cookie（`convert_to_site_format`）。Termux 用法：`termux-clipboard-get | python cookie_import.py <站点>`；桌面端可重定向扩展导出文件。
+- `core/tools/cookie_import.py` 是手机端恢复 Cookie 的推荐入口：stdin 自动识别 Cookie-Editor 的 JSON / `Cookie:` 请求头整段 / Netscape 三种导出（`detect_format`），按站点书面格式写文件——douyin/bilibili → Netscape（yt-dlp 可读），xiaohongshu → 请求头整段且 JSON 输入按域过滤第三方 cookie（`convert_to_site_format`）。Termux 用法：`termux-clipboard-get | python -m core.tools.cookie_import <站点>`；桌面端可重定向扩展导出文件。
 - Pillow / pillow-heif 为可选依赖（requirements.txt 中注释列出）：缺 Pillow 时装饰过滤自动回退体积阈值，缺 pillow-heif 时 live_photo 不能转 HEIC。Termux 上 Pillow 无 Android wheel，用 `pkg install python-pillow`。
 
 ## 提交与 PR
