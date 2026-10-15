@@ -61,7 +61,7 @@ python live_photo.py "download/xiaohongshu/<作者>/<标题>_<noteId>"
 - 抖音图文笔记（`douyin.com/note/<id>`，App 分享文案常见）yt-dlp 不支持，由 `douyin_downloader.py` 手写解析：带登录 Cookie 请求笔记页，从内嵌的 `RENDER_DATA`（或 `_ROUTER_DATA`）JSON 中提取图片列表与视频
 - **必须填有效登录态 Cookie** 到 `cookies/douyin.txt`：无 Cookie 时抖音返回 jsvm 反爬挑战页，脚本会识别并提示；Netscape 格式和浏览器复制的 `Cookie:` 请求头整段都能吃（脚本自动识别转换），与 yt-dlp 侧共用同一个文件
 - 图片默认下载**无水印最高档**（避开 `dy-water` 水印流水线，同档 q75 中 jpeg 优先）；与网页端浏览完全同源；输出 `download/douyin/[<作者>/]<标题>_<awemeId>/`，图片按 `001.jpg` 序号命名，实况图视频同序号配对 `001.mp4`，笔记级视频为 `video.mp4`
-- **抖音视频链接（`/video/<id>`）走签名 detail API**：2026-08/09 起视频详情接口（`aweme/v1/web/aweme/detail/`）启用了 JS 风控签名校验（Argus），yt-dlp 无签名整拦（报"Fresh cookies needed"误导为 Cookie 过期）；页面也不内嵌视频数据（pace_f 里 `aweme: null`）。本仓库补齐纯本地三件套签名后直连该 API——a_bogus（bdms.js 逆向）+ 伪 msToken + x-secsdk-web-signature（md5），算法移植自 [Evil0ctal/Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API)（Apache-2.0）。**Cookie 里的 `UIFID`/`s_v_web_id` 是签名必需项**（有效登录态天然齐全）；播放地址取网页播放端无水印 CDN 净版，输出 `download/douyin/[<作者>/]<标题>_<awemeId>.mp4`
+- **抖音视频链接（`/video/<id>`）走签名 detail API**：2026-08/09 起视频详情接口（`aweme/v1/web/aweme/detail/`）启用了 JS 风控签名校验（Argus），yt-dlp 无签名整拦（报"Fresh cookies needed"误导为 Cookie 过期）；页面也不内嵌视频数据（pace_f 里 `aweme: null`）。本仓库补齐纯本地三件套签名后直连该 API——a_bogus（bdms.js 逆向）+ 伪 msToken + x-secsdk-web-signature（md5），算法移植自 [Evil0ctal/Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API)（Apache-2.0）。**服务端门禁（2026-10 对照矩阵实测）= Cookie 含 `UIFID`（签名素材，值不校验）+ 有效 `ttwid` 或 `sessionid` 至少其一**；缺 UIFID 是 403，凭据失效是持续 `200 空响应`（脚本会识别并提示刷新 Cookie）。播放地址取网页播放端无水印 CDN 净版，输出 `download/douyin/[<作者>/]<标题>_<awemeId>.mp4`
 - 笔记页被反爬挑战（jsvm/验证码）拦截时自动改走同一个签名 detail API 兜底（两条链路风控独立），仍拦则按提示冷却/换网络
 
 #### 通用网页后端
@@ -166,7 +166,7 @@ iOS 没有 DevTools，也**无法**用“快捷指令”读取 Safari 的 Cookie
 
 说明：
 
-- 抖音登录后 `sessionid`/`ttwid` 与视频签名必需的 `UIFID`/`s_v_web_id` 会天然齐全；失效的典型症状是脚本提示"jsvm 反爬挑战页 / Cookie 失效"。
+- 抖音登录后视频门禁所需的 `UIFID` + `ttwid`/`sessionid` 会天然齐全；失效的典型症状是脚本提示"jsvm 反爬挑战页 / Cookie 失效"或视频详情持续"非 JSON 响应（0 字节）"。
 - 小红书除登录外，链接本身仍需带 `xsec_token`（2026-10 起裸 `explore/<id>` 链接一律 404，与 Cookie 无关）；从 App 分享的短链自带该参数。
 - bilibili 的 Cookie 仅在下不了高清/大会员画质时才需要更新，普通视频可空。
 
@@ -181,8 +181,41 @@ iOS 没有 DevTools，也**无法**用“快捷指令”读取 Safari 的 Cookie
 
 - Cookie 是敏感凭据，`cookies/` 已在 `.gitignore` 中，**切勿提交**。
 - Cookie 有有效期，失效后需重新获取（典型症状：bilibili 下不到高清、instagram 报“需要登录”、小红书提示风控）。
-- 各站点需要的关键 Cookie：bilibili → `SESSDATA`；instagram → `sessionid`；小红书 → `web_session` / `a1`；抖音 → `sessionid` / `ttwid`，视频签名另需 `UIFID` / `s_v_web_id`（登录态 Cookie 天然包含）。
+- 各站点需要的关键 Cookie：bilibili → `SESSDATA`；instagram → `sessionid`；小红书 → `web_session` / `a1`；抖音 → **`ttwid` 或 `sessionid` 至少一个有效** + 视频签名用的 `UIFID`（2026-10 实测门禁；ttwid 是设备级短期 token 会自然过期，`s_v_web_id` 服务端不校验）。抖音视频详情持续返回空响应（日志提示"非 JSON 响应（0 字节）"）= ttwid/sessionid 失效，刷新 Cookie 即可。
 - 抖音图文笔记的是手写解析后端，与 yt-dlp 共用 `cookies/douyin.txt`：Netscape 格式或 `Cookie:` 请求头整段都可以（脚本经 `cookie_text_to_header` 自动识别转换），但**必须含有效登录态**，否则抖音返回 jsvm 反爬挑战页。
+
+## 上传到 Telegram（可选）
+
+两个工具，共用同一份 `telegram.json` 配置（已 gitignore）：
+
+- **`tg_bot.py` — 聊天闭环机器人（Termux 常驻）**：给 bot 发链接（可带分享文案），自动下载并把产物回传到聊天——图片按 10 张/组发相册，视频发 video，HEIC/原图走文件；caption 自动带 **`#作者` `#站点`** 标签（Telegram 原生可点击、可搜索，方便按作者翻记录）。重复链接提示"已下载过"，超限文件提示跳过。`allowed_users` 白名单外的用户不会消耗你的下载（被拒时会回显其用户 id，方便加白）
+- **`tg_upload.py` — 命令行直发**：把本地已有目录/文件传上去（`--document` 原图不压缩，`--caption` 自定义说明，`--config` 指定配置）
+
+**配置步骤**（一次，终身有效）：
+
+1. Telegram 找 **@BotFather** → `/newbot` 拿 bot token
+2. 给 bot 发任意一条消息，浏览器打开 `https://api.telegram.org/bot<token>/getUpdates` 取你的用户 id（`message.from.id`）
+3. 首跑任一脚本自动生成 `telegram.json` 模板，填入：
+   - `bot_token`：上面拿到的 token
+   - `chat_id`：直发模式默认聊天（私聊你的用户 id，或频道 `@名字`）
+   - `allowed_users`：允许用 bot 的用户 id 列表（一般就你自己）
+
+```bash
+tmux new -s tg      # 常驻推荐
+python tg_bot.py    # 机器人模式：等消息
+# 或
+python tg_upload.py download/xiaohongshu/某作者/某笔记_xxx/   # 直发模式
+```
+
+限制：官方 Bot API 上传单文件 **≤50MB**（超限自动跳过并提示）；图片 >10MB 自动改按文件发送；实况照片的 `.heic` 一律按文件发送保原图。需要 ≤2GB 就得自建 telegram-bot-api 服务，不在本仓库范围。
+
+## Termux 与 TLS 指纹伪装（curl_cffi）
+
+curl_cffi 核心是编译好的 C 扩展，PyPI 只发 glibc/macOS/Windows 的预编译 wheel——Android 是 Bionic libc，装不上或装上后被 Termux 的 Python 滚动升级（3.13→3.14）震碎 ABI。tur 第三方源也没有 curl-impersonate 系包。三个解决方案（按推荐排序）：
+
+1. **什么都不用做（当前默认）**：`http_client.py` 自动降级系统 curl，只加 `--http2` + 完整 Chrome 请求头。2026-10 实测抖音签名 API / 小红书 / bilibili 全链路均不校验 JA3 指纹，伪装收益为零。
+2. **源码重建**：`bash setup_termux.sh`（内含检测 + `pip install --force-reinstall curl_cffi`）。编过即恢复 chrome150 指纹；编不过自动保持降级，功能无损。
+3. **proot-distro 一劳永逸**：`pkg install proot-distro && proot-distro install debian`，进 Debian（glibc aarch64）后 `pip install -r requirements.txt` 直接命中 manylinux wheel，且 Debian 的 Python 由 apt 钉版不漂移。在 `/sdcard` 下 clone 并运行，下载产物直接进共享存储。
 
 ## 测试
 

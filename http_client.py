@@ -9,6 +9,7 @@ Termux 上 curl_cffi 的编译扩展常因 Python 版本不匹配而加载失败
 系统 curl 命令由 libcurl 处理 TLS，不依赖 Python ABI，在 Termux 上天然可用。
 """
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -164,6 +165,29 @@ class Session:
         impersonate = kwargs.get("impersonate")
         stream = kwargs.get("stream", False)
         return _curl_request(url, "GET", headers, timeout, impersonate, stream)
+
+    def post_files(self, url, data=None, files=None, headers=None, timeout=60):
+        """multipart/form-data POST（上传用）。files 为 {字段名: 本地文件路径}。
+
+        curl_cffi 路径把文件读入内存后按 (filename, bytes) 交给它；
+        降级路径翻译成等价的 `curl -F field=@path`。
+        """
+        if self._cffi is not None:
+            cffi_files = None
+            if files:
+                cffi_files = {}
+                for field, path in files.items():
+                    with open(path, "rb") as f:
+                        cffi_files[field] = (os.path.basename(path), f.read())
+            return self._cffi.post(url, data=data or {}, files=cffi_files,
+                                   headers=headers, timeout=timeout)
+        flags = []
+        for k, v in (data or {}).items():
+            flags += ["-F", f"{k}={v}"]
+        for field, path in (files or {}).items():
+            flags += ["-F", f"{field}=@{path}"]
+        return _curl_request(url, "POST", headers, timeout, None, False,
+                             extra_flags=flags)
 
     def close(self):
         if self._cffi is not None:

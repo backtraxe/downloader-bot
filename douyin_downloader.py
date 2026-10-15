@@ -353,9 +353,12 @@ def build_signed_detail_url(aweme_id, cookies, user_agent=_UA150):
       msToken                —— 伪随机串，服务端不校验
       x-secsdk-web-signature —— md5(uifid_timestamp_盐_query)，这是
                                 "Uifid Not Found" 拦截报文的对应物
-    cookies 需含 UIFID(/UIFID_TEMP) 与 s_v_web_id——有效登录态 Cookie
-    天然齐全。2026-10-14 本机实测：同一接口、同一 Cookie，补齐三件套后
-    200 返回完整 aweme_detail 与无水印播放地址。
+    cookies 需含 UIFID(/UIFID_TEMP)——websign 素材，任意非空值即可，
+    服务端不校验内容。2026-10-14 对照矩阵实测服务端门禁 = UIFID
+    签名 + 有效 ttwid 或 sessionid 至少其一（两者缺一才回 200 空；
+    s_v_web_id 仅随 query 的 verifyFp/fp 携带，不校验）。同机实测：
+    同一接口、同一 Cookie，补齐三件套后 200 返回完整 aweme_detail
+    与无水印播放地址。
 
     cookies 为 {name: value} 映射。返回 (url, 附加请求头)；缺 UIFID 时
     退化为仅 a_bogus 签名、无附加头（未保护端点仍可用，不伪造 websign）。
@@ -416,9 +419,12 @@ def extract_video_play_urls(video):
 class _NonJsonResponse(RuntimeError):
     """detail API 返回 2xx 但正文非 JSON：空响应或风控拦截页。
 
-    抖音对同 IP 高频请求会间歇性回空 body（或整页拦截）而不是 403，
-    属于概率性信号，应退避重试，而不是一次失败（2026-10 实测：
-    同一链接 Mac 直连 3/3 全过，另一网络环境 0.2s 返回空响应）。
+    两类成因：一是同 IP 高频下的概率性空 body（blip，退避重试即过）；
+    二是 Cookie 缺有效会话凭据的确定性空响应——2026-10-14 对照矩阵
+    实测门禁 = UIFID（websign 签名素材，任意非空值即可）+ 有效
+    ttwid 或 sessionid 至少其一；ttwid 过期且 sessionid 缺失/失效时
+    一律 200 空，缺 UIFID 才是 403 Argus。后者重试无用，靠报错文案
+    引导用户刷新 Cookie。
     """
 
 
@@ -469,9 +475,11 @@ def fetch_aweme_detail(aweme_id, cookie, session, max_retries=3):
             logger.error("detail API 请求失败: %s", last_err)
             if isinstance(last_err, _NonJsonResponse):
                 logger.error(
-                    "抖音对该设备/IP 返回了空响应或拦截页——多为同 IP 高频"
-                    "限流或新增设备风控：建议冷却 10–30 分钟、换网络或刷新"
-                    " Cookie（cookie_import.py）后重试")
+                    "detail API 持续返回空响应：Cookie 缺有效会话凭据——"
+                    "实测门禁 = UIFID（签名用）+ 有效 ttwid 或 sessionid "
+                    "至少其一，ttwid 过期正是这种形态。请刷新 Cookie："
+                    "手机端 termux-clipboard-get | python "
+                    "cookie_import.py douyin")
             return None
         status = data.get("status_code")
         detail = data.get("aweme_detail")
