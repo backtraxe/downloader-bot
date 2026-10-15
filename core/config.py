@@ -5,7 +5,8 @@ config.json 不只服务于 Telegram：任何需要用户级配置的模块都�
 读写自己的顶层键。当前已有的顶层键：
 
   telegram    telegram/bot.py 与 telegram/upload.py 共用
-              （bot_token / chat_id / allowed_users）
+              （bot_token / chat_id / allowed_users /
+              process_message_ttl_seconds）
 
 向后兼容：旧版扁平结构的 `telegram.json` 在 config.json 缺失时仍被读取，
 等价于 {"telegram": <其内容>}；两者都没有时写模板并返回 None，由调用方
@@ -24,6 +25,7 @@ _TEMPLATE = {
         "bot_token": "在此填入 @BotFather 给的 token",
         "chat_id": 0,
         "allowed_users": [],
+        "process_message_ttl_seconds": 300,
     },
 }
 

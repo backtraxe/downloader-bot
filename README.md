@@ -221,7 +221,7 @@ python -m telegram.bot      # 机器人模式：等消息
 python -m telegram.upload download/xiaohongshu/某作者/某笔记_xxx/   # 直发模式
 ```
 
-限制：官方 Bot API 上传单文件 **≤50MB**（超限自动跳过并提示）；图片 >10MB 自动改按文件发送；实况照片的 `.heic` 一律按文件发送保原图。需要 ≤2GB 就得自建 telegram-bot-api 服务，不在本仓库范围。
+限制：官方 Bot API 上传单文件 **≤50MB**；能预览的尽量预览——HEIC 与超标大图自动转码/压缩为 ≤10MB JPEG 走相册（依赖 Pillow/pillow-heif，依赖缺失或失败则回退按文件发送），>50MB 视频在本机有 ffmpeg 时压到 ~49MB 再发，没有则维持超限跳过；Telegram 上的是浏览版，原始字节始终在本地 `download/`。bot 模式的过程提示消息（开始下载/没识别到链接/失败提示等）默认 5 分钟后自动删除（`config.json` telegram 段的 `process_message_ttl_seconds`，0 关闭；相册/视频等媒体消息永不删）。需要 ≤2GB 就得自建 telegram-bot-api 服务，不在本仓库范围。
 
 ## Termux 与 TLS 指纹伪装（curl_cffi）
 

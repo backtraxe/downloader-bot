@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 
 from core import http_client
@@ -37,6 +38,8 @@ logger = logging.getLogger("downloader")
 
 _API_BASE = "https://api.telegram.org"
 DOWNLOAD_ROOT = "download"
+# 过程提示消息自动删除的默认 TTL（config.json telegram 段缺失该键时按此值）
+PROCESS_MESSAGE_TTL_DEFAULT = 300
 
 
 # ---------------- 标签与元数据（纯函数） ----------------
@@ -115,10 +118,45 @@ def parse_post_meta(group_key, rel_files):
 # ---------------- 消息处理 ----------------
 
 
-def _reply(session, token, chat_id, text):
-    call_api(
+def _reply(session, token, chat_id, text, ttl=0, timer_cls=threading.Timer):
+    """发文字提示消息；ttl>0 时对其 message_id 挂自动删除。
+
+    只覆盖 say() 链路的文字提示（开始下载/无链接/已下载过/失败提示等）；
+    媒体消息（相册/视频/document）不走这里，永不自动删除。
+    响应拿不到 message_id 时跳过调度，不报错。
+    """
+    result = call_api(
         session, {"bot_token": token}, "sendMessage", {"chat_id": chat_id, "text": text}
     )
+    message_id = (result or {}).get("message_id") if isinstance(result, dict) else None
+    if ttl > 0 and message_id is not None:
+        _schedule_delete(session, token, chat_id, message_id, ttl, timer_cls)
+
+
+def _schedule_delete(
+    session, token, chat_id, message_id, ttl, timer_cls=threading.Timer
+):
+    """ttl 秒后删除该消息。
+
+    Timer 设为 daemon，不阻碍进程退出；bot 重启时未到期的删除计划随之
+    丢失（预期语义——重启本来就是清状态，消息最多多留一会）。
+    """
+    t = timer_cls(ttl, _delete_message, args=(session, token, chat_id, message_id))
+    t.daemon = True
+    t.start()
+
+
+def _delete_message(session, token, chat_id, message_id):
+    """调 deleteMessage；失败只记日志（频道里 bot 可能无删除消息管理员权限）。"""
+    try:
+        call_api(
+            session,
+            {"bot_token": token},
+            "deleteMessage",
+            {"chat_id": chat_id, "message_id": message_id},
+        )
+    except Exception as e:
+        logger.warning("删除过程消息失败: %s", e)
 
 
 def is_allowed(cfg, user_id):
@@ -128,18 +166,27 @@ def is_allowed(cfg, user_id):
 
 
 def handle_message(
-    session, cfg, message, dispatch=dispatch_url, download_root=DOWNLOAD_ROOT
+    session,
+    cfg,
+    message,
+    dispatch=dispatch_url,
+    download_root=DOWNLOAD_ROOT,
+    timer_cls=threading.Timer,
 ):
     """处理一条消息；返回回复文本列表（真实发送经 _reply，测试中读返回）。"""
     token = cfg["bot_token"]
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
     user_id = (message.get("from") or {}).get("id")
+    # 过程提示消息 TTL：0 = 关闭自动删除；配置缺键时按默认 300 秒
+    ttl = cfg.get("process_message_ttl_seconds")
+    if ttl is None:
+        ttl = PROCESS_MESSAGE_TTL_DEFAULT
     replies = []
 
     def say(text):
         replies.append(text)
-        _reply(session, token, chat_id, text)
+        _reply(session, token, chat_id, text, ttl=ttl, timer_cls=timer_cls)
 
     text = (message.get("text") or "").strip()
     if not text:

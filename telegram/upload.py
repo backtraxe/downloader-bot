@@ -13,15 +13,21 @@
     python -m telegram.upload <目标> --document      # 全部按"文件"发送（原图不压缩）
     python -m telegram.upload <目标> --caption 标题
 
-限制：Bot API 上传单文件 ≤50MB；图片 >10MB 自动改按文件发送（Telegram
-photo 上限）；超限走自建 telegram-bot-api（2GB）不在本脚本范围。
+限制：Bot API 上传单文件 ≤50MB。能预览的尽量预览：HEIC 与超标大图自动
+转码/压缩为 ≤10MB JPEG 走相册（依赖 Pillow/pillow-heif，缺失或失败则
+回退按文件发送）；>50MB 视频在本机有 ffmpeg 时压到 ~49MB 再发，没有则
+维持超限跳过。Telegram 上的是浏览版，原始字节始终在本地 download/。
+超限走自建 telegram-bot-api（2GB）不在本脚本范围。
 """
 
 import argparse
 import json
 import logging
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 
 from core import config as core_config
@@ -38,8 +44,23 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 ALBUM_SIZE = 10  # sendMediaGroup 每组上限
 
-_PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp"}  # heic 只按 document 发
+_PHOTO_EXTS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+}  # 可预览直发；heic 转码成功后以 JPEG 产物入列
 _VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv"}
+
+# 预览图尺寸上限（宽+高像素和），超出先等比缩到线内再压体积
+MAX_PHOTO_DIM_SUM = 10000
+# 图片压缩链：质量阶梯 × 每轮 0.85 再缩放，任一结果 ≤10MB 即收
+_JPEG_QUALITIES = (88, 80, 72)
+_SCALE_FACTOR = 0.85
+_MAX_COMPRESS_ROUNDS = 8
+# 视频压缩目标 ~49MB（给封装开销留 1MB 余量）；音轨固定 96k，从码率预算扣除
+_VIDEO_TARGET_BYTES = 49 * 1024 * 1024
+_AUDIO_BITRATE = 96_000
 
 
 class TgError(RuntimeError):
@@ -117,6 +138,189 @@ def plan_uploads(files, document=False, size_of=os.path.getsize):
     return ops
 
 
+# ---------------- 预览预处理（插在 collect 与 plan 之间） ----------------
+
+
+def _try_heic_to_jpeg(path, tmpdir):
+    """HEIC/HEIF → JPEG（Pillow + pillow-heif，惰性 import）。依赖缺失或解码失败返回 None。"""
+    try:
+        import pillow_heif
+        from PIL import Image
+    except ImportError:
+        return None
+    try:
+        pillow_heif.register_heif_opener()
+        stem = os.path.splitext(os.path.basename(path))[0]
+        out = os.path.join(tmpdir, stem + ".jpg")
+        with Image.open(path) as img:
+            img.convert("RGB").save(out, format="JPEG", quality=95)
+    except Exception:
+        logger.warning("HEIC 转码失败，按文件原样发送: %s", path)
+        return None
+    return out
+
+
+def _transcode_photo_if_needed(path, tmpdir):
+    """超标图片压成 ≤10MB JPEG 预览；达标或无法解码 → 原样返回。
+
+    返回 (发送路径, 需清理的临时文件或 None)。压缩链：先等比缩到
+    宽+高 ≤ MAX_PHOTO_DIM_SUM，再按质量阶梯逐档试，每轮仍超标就再
+    缩放 0.85 倍，上限 _MAX_COMPRESS_ROUNDS 轮；全失败回退原文件。
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return path, None
+    try:
+        with Image.open(path) as img:
+            width, height = img.size
+    except Exception:
+        return path, None
+    size = os.path.getsize(path)
+    if size <= MAX_PHOTO_BYTES and width + height <= MAX_PHOTO_DIM_SUM:
+        return path, None
+    scale = min(1.0, MAX_PHOTO_DIM_SUM / (width + height))
+    cur_w = max(1, int(width * scale))
+    cur_h = max(1, int(height * scale))
+    stem = os.path.splitext(os.path.basename(path))[0]
+    out = os.path.join(tmpdir, stem + ".jpg")
+    try:
+        with Image.open(path) as img:
+            rgb = img.convert("RGB")
+            for _ in range(_MAX_COMPRESS_ROUNDS):
+                if (cur_w, cur_h) != rgb.size:
+                    rgb = rgb.resize((cur_w, cur_h), Image.LANCZOS)
+                for quality in _JPEG_QUALITIES:
+                    rgb.save(out, format="JPEG", quality=quality)
+                    if os.path.getsize(out) <= MAX_PHOTO_BYTES:
+                        logger.info(
+                            "图片压缩预览：%s → %s（%.1fMB → %.1fMB）",
+                            path,
+                            out,
+                            size / 1048576,
+                            os.path.getsize(out) / 1048576,
+                        )
+                        return out, out
+                cur_w = max(1, int(cur_w * _SCALE_FACTOR))
+                cur_h = max(1, int(cur_h * _SCALE_FACTOR))
+    except Exception:
+        logger.warning("图片压缩失败，按文件原样发送: %s", path)
+    return path, None
+
+
+def _try_compress_video(path, tmpdir, _run=subprocess.run):
+    """>50MB 视频用 ffmpeg 压到 ~49MB；ffmpeg/ffprobe 缺失、时长解析失败
+    或产物仍超限 → 返回 None（调用方维持 too_big 语义）。"""
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        return None
+    try:
+        probe = _run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=nw=1:nk=1",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        duration = float((probe.stdout or "").strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if duration <= 0:
+        return None
+    bitrate = int((_VIDEO_TARGET_BYTES * 8) / duration) - _AUDIO_BITRATE
+    if bitrate <= 0:
+        return None
+    stem = os.path.splitext(os.path.basename(path))[0]
+    out = os.path.join(tmpdir, stem + ".mp4")
+    try:
+        _run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                path,
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-b:v",
+                str(bitrate),
+                "-maxrate",
+                str(bitrate),
+                "-bufsize",
+                str(bitrate * 2),
+                "-c:a",
+                "aac",
+                "-b:a",
+                "96k",
+                "-movflags",
+                "+faststart",
+                out,
+            ],
+            capture_output=True,
+            timeout=1800,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if not os.path.isfile(out):
+        return None
+    if os.path.getsize(out) > MAX_UPLOAD_BYTES:
+        return None  # 产物仍超限 → 放弃，维持 too_big
+    logger.info(
+        "视频压缩预览：%s → %s（%.1fMB → %.1fMB）",
+        path,
+        out,
+        os.path.getsize(path) / 1048576,
+        os.path.getsize(out) / 1048576,
+    )
+    return out
+
+
+def _prepare_one(path, tmpdir, _run=subprocess.run):
+    """单个文件的预览预处理，返回 (发送路径, 需清理的临时文件或 None)。"""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in _VIDEO_EXTS and os.path.getsize(path) > MAX_UPLOAD_BYTES:
+        compressed = _try_compress_video(path, tmpdir, _run=_run)
+        if compressed:
+            return compressed, compressed
+        return path, None
+    if ext in (".heic", ".heif"):
+        converted = _try_heic_to_jpeg(path, tmpdir)
+        if converted is None:
+            return path, None
+        send, _temp = _transcode_photo_if_needed(converted, tmpdir)
+        # 转码与后续压缩的产物都落在 tmpdir 同一 jpg 路径上，统一按 send 清理
+        return send, send
+    if ext in _PHOTO_EXTS:
+        return _transcode_photo_if_needed(path, tmpdir)
+    return path, None
+
+
+def prepare_media(files, tmpdir=None):
+    """collect 之后、plan 之前的预览预处理入口。
+
+    返回 (发送路径列表, 需清理的临时文件列表)；tmpdir 可注入便于测试，
+    默认 tempfile.mkdtemp(prefix="tg_preview_")。临时文件与目录的清理由
+    调用方负责。
+    """
+    if tmpdir is None:
+        tmpdir = tempfile.mkdtemp(prefix="tg_preview_")
+    send_paths, temp_paths = [], []
+    for path in files:
+        send, temp = _prepare_one(path, tmpdir)
+        send_paths.append(send)
+        if temp:
+            temp_paths.append(temp)
+    return send_paths, temp_paths
+
+
 # ---------------- Bot API 调用 ----------------
 
 
@@ -157,58 +361,76 @@ def upload(session, cfg, target, document=False, caption=None, chat_id=None):
     files = collect_media(target)
     if not files:
         raise TgError(f"目标里没有文件：{target}")
-    ops = plan_uploads(files, document=document)
+    temp_paths, tmpdir = [], None
+    if document:  # 用户明确要原样 → 跳过预览预处理
+        send_files = files
+    else:
+        tmpdir = tempfile.mkdtemp(prefix="tg_preview_")
+        send_files, temp_paths = prepare_media(files, tmpdir=tmpdir)
+    ops = plan_uploads(send_files, document=document)
     sent, skipped = 0, []
     if chat_id is None:
         chat_id = cfg["chat_id"]
-    for kind, payload in ops:
-        if kind == "too_big":
-            skipped.append(payload)
-            logger.warning("超过 Bot API 50MB 上限，跳过：%s", payload)
-            continue
-        if kind == "album":
-            if len(payload) == 1:
-                call_api(
-                    session,
-                    cfg,
-                    "sendPhoto",
-                    {"chat_id": chat_id, "caption": _caption_for(payload[0], caption)},
-                    {"photo": payload[0]},
+    try:
+        for kind, payload in ops:
+            if kind == "too_big":
+                skipped.append(payload)
+                logger.warning("超过 Bot API 50MB 上限，跳过：%s", payload)
+                continue
+            if kind == "album":
+                if len(payload) == 1:
+                    call_api(
+                        session,
+                        cfg,
+                        "sendPhoto",
+                        {
+                            "chat_id": chat_id,
+                            "caption": _caption_for(payload[0], caption),
+                        },
+                        {"photo": payload[0]},
+                    )
+                else:
+                    media, files_map = [], {}
+                    for i, path in enumerate(payload):
+                        attach = f"file{i}"
+                        item = {"type": "photo", "media": f"attach://{attach}"}
+                        if i == 0 and caption:
+                            item["caption"] = caption
+                        media.append(item)
+                        files_map[attach] = path
+                    call_api(
+                        session,
+                        cfg,
+                        "sendMediaGroup",
+                        {
+                            "chat_id": chat_id,
+                            "media": json.dumps(media, ensure_ascii=False),
+                        },
+                        files_map,
+                    )
+                logger.info(
+                    "相册 %d 张已发送：%s…", len(payload), os.path.basename(payload[0])
                 )
+                sent += len(payload)
             else:
-                media, files_map = [], {}
-                for i, path in enumerate(payload):
-                    attach = f"file{i}"
-                    item = {"type": "photo", "media": f"attach://{attach}"}
-                    if i == 0 and caption:
-                        item["caption"] = caption
-                    media.append(item)
-                    files_map[attach] = path
+                method = "sendVideo" if kind == "video" else "sendDocument"
                 call_api(
                     session,
                     cfg,
-                    "sendMediaGroup",
-                    {
-                        "chat_id": chat_id,
-                        "media": json.dumps(media, ensure_ascii=False),
-                    },
-                    files_map,
+                    method,
+                    {"chat_id": chat_id, "caption": _caption_for(payload, caption)},
+                    {"video" if kind == "video" else "document": payload},
                 )
-            logger.info(
-                "相册 %d 张已发送：%s…", len(payload), os.path.basename(payload[0])
-            )
-            sent += len(payload)
-        else:
-            method = "sendVideo" if kind == "video" else "sendDocument"
-            call_api(
-                session,
-                cfg,
-                method,
-                {"chat_id": chat_id, "caption": _caption_for(payload, caption)},
-                {"video" if kind == "video" else "document": payload},
-            )
-            logger.info("已发送（%s）：%s", kind, os.path.basename(payload))
-            sent += 1
+                logger.info("已发送（%s）：%s", kind, os.path.basename(payload))
+                sent += 1
+    finally:
+        for temp in temp_paths:
+            try:
+                os.unlink(temp)
+            except OSError:
+                pass
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
     return sent, skipped
 
 

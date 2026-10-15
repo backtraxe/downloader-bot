@@ -3,16 +3,21 @@
 
 import json
 import os
+import sys
 
 import pytest
 
 from core.config import _TEMPLATE
 from telegram.upload import (
+    MAX_PHOTO_BYTES,
     TgError,
+    _prepare_one,
+    _try_compress_video,
     call_api,
     collect_media,
     load_config,
     plan_uploads,
+    prepare_media,
     upload,
 )
 
@@ -212,3 +217,117 @@ class TestUpload:
     def test_empty_dir_raises(self, tmp_path):
         with pytest.raises(TgError):
             upload(_Session(), _CFG, str(tmp_path))
+
+
+# ---------------- prepare_media 预览预处理 ----------------
+
+
+class _Completed:
+    """假 subprocess 返回值。"""
+
+    def __init__(self, stdout=""):
+        self.stdout = stdout
+
+
+class TestPrepareOne:
+    def test_small_jpeg_unchanged_no_temp(self, tmp_path):
+        p = _touch(tmp_path / "a.jpg", b"tiny")
+        tmpdir = tmp_path / "t"
+        tmpdir.mkdir()
+        send, temps = prepare_media([p], tmpdir=str(tmpdir))
+        assert send == [p] and temps == []
+        assert os.listdir(tmpdir) == []  # 无任何临时产物落盘
+
+    def test_prepare_one_small_jpeg(self, tmp_path):
+        p = _touch(tmp_path / "a.jpg", b"tiny")
+        tmpdir = tmp_path / "t"
+        tmpdir.mkdir()
+        send, temp = _prepare_one(p, str(tmpdir))
+        assert send == p and temp is None
+
+    def test_big_noisy_jpeg_compressed(self, tmp_path):
+        Image = pytest.importorskip("PIL.Image")
+        # 随机噪声图保证源文件 >10MB 且近似不可压（真实触发压缩链）
+        img = Image.frombytes("RGB", (6000, 5000), os.urandom(6000 * 5000 * 3))
+        src = tmp_path / "big.jpg"
+        img.save(src, format="JPEG", quality=95)
+        assert src.stat().st_size > MAX_PHOTO_BYTES
+        tmpdir = tmp_path / "t"
+        tmpdir.mkdir()
+        send, temp = _prepare_one(str(src), str(tmpdir))
+        assert temp is not None and send == temp
+        assert send.endswith(".jpg") and str(tmpdir) in send
+        assert os.path.getsize(send) <= MAX_PHOTO_BYTES
+        with Image.open(send) as again:  # 产物可再次被 PIL 打开
+            again.verify()
+
+    def test_heic_missing_deps_falls_back(self, tmp_path, monkeypatch):
+        # pillow_heif 导入失败 → 原样返回（维持 document 现状）
+        monkeypatch.setitem(sys.modules, "pillow_heif", None)
+        p = _touch(tmp_path / "a.heic", b"x")
+        tmpdir = tmp_path / "t"
+        tmpdir.mkdir()
+        send, temp = _prepare_one(p, str(tmpdir))
+        assert send == p and temp is None
+
+    def test_heic_converted_to_jpeg(self, tmp_path):
+        Image = pytest.importorskip("PIL.Image")
+        pillow_heif = pytest.importorskip("pillow_heif")
+        pillow_heif.register_heif_opener()
+        src = tmp_path / "a.heic"
+        Image.new("RGB", (64, 48), (200, 30, 30)).save(src, format="HEIF")
+        tmpdir = tmp_path / "t"
+        tmpdir.mkdir()
+        send, temp = _prepare_one(str(src), str(tmpdir))
+        assert temp is not None and send == temp
+        assert send.endswith(".jpg") and str(tmpdir) in send
+
+    def test_video_bitrate_from_duration(self, tmp_path):
+        calls = []
+
+        def fake_run(argv, **_kwargs):
+            calls.append(argv)
+            if argv[0] == "ffprobe":
+                return _Completed(stdout="120.5\n")
+            with open(argv[-1], "wb") as f:  # 假 ffmpeg：产出小文件即视为成功
+                f.write(b"x" * 1024)
+            return _Completed()
+
+        src = _touch(tmp_path / "big.mp4", b"x" * (51 * 1024 * 1024))
+        tmpdir = tmp_path / "t"
+        tmpdir.mkdir()
+        out = _try_compress_video(src, str(tmpdir), _run=fake_run)
+        expected = int((49 * 1024 * 1024 * 8) / 120.5) - 96_000
+        assert out == str(tmpdir / "big.mp4")
+        ffmpeg_argv = [a for a in calls if a[0] == "ffmpeg"][0]
+        assert ffmpeg_argv[ffmpeg_argv.index("-b:v") + 1] == str(expected)
+        assert ffmpeg_argv[ffmpeg_argv.index("-maxrate") + 1] == str(expected)
+        assert ffmpeg_argv[ffmpeg_argv.index("-bufsize") + 1] == str(expected * 2)
+
+    def test_video_no_ffmpeg_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("telegram.upload.shutil.which", lambda name: None)
+        src = _touch(tmp_path / "big.mp4", b"x")
+        assert _try_compress_video(src, str(tmp_path)) is None
+
+
+class TestPrepareMediaIntegration:
+    def test_upload_prepares_and_cleans_tempdir(self, tmp_path, monkeypatch):
+        Image = pytest.importorskip("PIL.Image")
+        img = Image.frombytes("RGB", (6000, 5000), os.urandom(6000 * 5000 * 3))
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+        img.save(media_dir / "big.jpg", format="JPEG", quality=95)
+        _touch(media_dir / "small.mp4", b"x")
+        pre = tmp_path / "pre"
+        monkeypatch.setattr(
+            "telegram.upload.tempfile.mkdtemp",
+            lambda prefix="": (pre.mkdir(), str(pre))[1],
+        )
+        s = _Session()
+        sent, skipped = upload(s, _CFG, str(media_dir))
+        assert sent == 2 and skipped == []
+        methods = [c[0].rsplit("/", 1)[1] for c in s.calls]
+        assert methods == ["sendPhoto", "sendVideo"]  # 大图被压到 ≤10MB 走 photo
+        photo_path = s.calls[0][2]["photo"]
+        assert str(pre) in photo_path  # 发送的是 tmpdir 里的预览产物
+        assert not pre.exists()  # finally 后临时目录被清空

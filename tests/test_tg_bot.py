@@ -232,3 +232,101 @@ class TestAllowlist:
         assert is_allowed(_CFG, 8) is False
         assert is_allowed({"allowed_users": []}, 7) is False
         assert is_allowed({}, 7) is False
+
+
+# ---------------- 过程消息 TTL 自动删除 ----------------
+
+
+class _ImmediateTimer:
+    """假 threading.Timer：start() 即同步执行回调，便于断言删除调用。"""
+
+    def __init__(self, interval, function, args=(), kwargs=None):
+        self.interval = interval
+        self.function = function
+        self.args = args
+        self.kwargs = kwargs or {}
+        self.daemon = False
+
+    def start(self):
+        self.function(*self.args, **self.kwargs)
+
+
+class TestProcessMessageTtl:
+    def test_text_message_scheduled_and_deleted(self):
+        cfg = {**_CFG, "process_message_ttl_seconds": 60}
+        s = _Session()
+        handle_message(
+            s,
+            cfg,
+            _msg("今天天气不错"),
+            dispatch=lambda u: None,
+            timer_cls=_ImmediateTimer,
+        )
+        methods = [m for m, _ in s.sent]
+        assert methods == ["sendMessage", "deleteMessage"]
+        assert s.sent[0][1]["chat_id"] == 42
+        assert s.sent[1][1] == {"chat_id": 42, "message_id": 1}
+
+    def test_ttl_zero_never_deletes(self):
+        cfg = {**_CFG, "process_message_ttl_seconds": 0}
+        s = _Session()
+        handle_message(
+            s,
+            cfg,
+            _msg("今天天气不错"),
+            dispatch=lambda u: None,
+            timer_cls=_ImmediateTimer,
+        )
+        assert all(m != "deleteMessage" for m, _ in s.sent)
+
+    def test_missing_message_id_skips_schedule(self):
+        class _RespNoId:
+            def json(self):
+                return {"ok": True, "result": {}}
+
+        class _NoIdSession:
+            def __init__(self):
+                self.sent = []
+
+            def post_files(self, url, data=None, files=None, timeout=None):
+                self.sent.append((url.rsplit("/", 1)[1], data or {}))
+                return _RespNoId()
+
+            def get(self, url, **kwargs):
+                raise AssertionError("本组测试不触发 getUpdates")
+
+            def close(self):
+                pass
+
+        s = _NoIdSession()
+        handle_message(
+            s,
+            {**_CFG, "process_message_ttl_seconds": 60},
+            _msg("今天天气不错"),
+            dispatch=lambda u: None,
+            timer_cls=_ImmediateTimer,
+        )
+        # 响应缺 message_id → 不调度不报错，只发出 sendMessage
+        assert [m for m, _ in s.sent] == ["sendMessage"]
+
+    def test_media_messages_never_deleted(self, tmp_path):
+        root = str(tmp_path / "download")
+
+        def dispatch(url):
+            _touch(os.path.join(root, "site", "标题", "001.jpg"))
+
+        cfg = {**_CFG, "process_message_ttl_seconds": 60}
+        s = _Session()
+        handle_message(
+            s,
+            cfg,
+            _msg("https://x.com/a"),
+            dispatch=dispatch,
+            download_root=root,
+            timer_cls=_ImmediateTimer,
+        )
+        methods = [m for m, _ in s.sent]
+        assert "sendPhoto" in methods or "sendMediaGroup" in methods
+        # 自动删除只作用于 _reply 文字提示：删除条数恰等于文字消息条数，
+        # 媒体消息（相册/视频/document）永不进入删除序列
+        assert methods.count("deleteMessage") == methods.count("sendMessage") == 2
