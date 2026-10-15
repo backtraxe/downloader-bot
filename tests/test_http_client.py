@@ -49,7 +49,6 @@ class TestCurlResponse:
         assert list(r.iter_content()) == []
 
     def test_json(self):
-        import json
         r = CurlResponse(200, {}, b'{"key": "val"}', "http://x")
         assert r.json() == {"key": "val"}
 

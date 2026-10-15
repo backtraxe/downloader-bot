@@ -135,8 +135,8 @@ def _curl_request(url, method="GET", headers=None, timeout=15, impersonate=None,
     args = _build_curl_args(url, method, headers, timeout, impersonate, stream)
     try:
         proc = subprocess.run(args, capture_output=True, timeout=timeout + 10)
-    except subprocess.TimeoutExpired:
-        raise Exception(f"curl 请求超时（{timeout}s）：{url}")
+    except subprocess.TimeoutExpired as e:
+        raise Exception(f"curl 请求超时（{timeout}s）：{url}") from e
 
     if proc.returncode != 0:
         stderr = proc.stderr.decode("utf-8", errors="replace").strip()

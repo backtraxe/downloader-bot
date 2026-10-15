@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 """xhs_downloader.py 纯函数单元测试（无网络依赖）"""
-import pytest
-
 from core.xhs_downloader import detect_note_not_found, detect_risk_control, extract_xhs_author
 
 

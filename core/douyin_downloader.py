@@ -462,7 +462,7 @@ def fetch_aweme_detail(aweme_id, cookie, session, max_retries=3):
             except ValueError:
                 raise _NonJsonResponse(
                     f"{r.status_code} 非 JSON 响应（{len(text)} 字节）: "
-                    f"{text[:80]!r}")
+                    f"{text[:80]!r}") from None
         except Exception as e:
             last_err = e
             retryable = _is_transient_error(e) or isinstance(e, _NonJsonResponse)

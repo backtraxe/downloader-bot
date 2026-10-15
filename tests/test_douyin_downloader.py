@@ -301,7 +301,7 @@ class TestExtractDouyinAuthor:
 
     def test_missing_author_returns_empty(self):
         assert extract_douyin_author({}) == ""
-        assert extract_douyin_author(None) is "" or extract_douyin_author(None) == ""
+        assert extract_douyin_author(None) == ""
 
 
 # ---------------- resolve_douyin_basename ----------------

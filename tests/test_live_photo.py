@@ -2,8 +2,6 @@
 """live_photo.py 纯函数单元测试（不依赖 ffmpeg/exiftool/网络）"""
 import os
 
-import pytest
-
 import core.live_photo as lp
 
 

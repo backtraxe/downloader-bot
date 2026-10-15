@@ -122,7 +122,7 @@ def transcode_to_jpeg(image_bytes, ext):
             raise RuntimeError(
                 "处理 HEIC 需安装 pillow-heif：pip install pillow-heif\n"
                 "  （Termux 需先 pkg install libheif，再 pip install pillow-heif 源码编译）"
-            )
+            ) from None
         pillow_heif.register_heif_opener()
     with Image.open(io.BytesIO(image_bytes)) as img:
         rgb = img.convert("RGB")

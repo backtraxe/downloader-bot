@@ -32,6 +32,7 @@ telegram/
 根目录 downloader.py / xhs_downloader.py / douyin_downloader.py / 1024_downloader.py /
 live_photo.py / cookie_import.py / cookie_login.py / tg_bot.py / tg_upload.py = 兼容入口 shim
 conftest.py            # 让裸 pytest 也能从仓库根导入两个包
+ruff.toml              # 静态检查配置（只选 F/E9/W/B bug 类规则）
 setup_termux.sh        # Termux 首次使用配置脚本（仅 Termux 环境）
 tests/                 # pytest 单元测试（不联网），文件名与模块一一对应
 requirements.txt       # 依赖清单（requests / fake_useragent / beautifulsoup4 / curl_cffi / yt-dlp）
@@ -47,11 +48,12 @@ config.json            # 仓库统一配置（已 gitignore）；旧版 telegram
 python -m venv .venv && source .venv/bin/activate   # 可选但推荐
 pip install -r requirements.txt
 pip install pytest
-python -m pytest -q                                  # 431 个单元测试，全部离线
+python -m pytest -q                                  # 单元测试，全部离线
 python downloader.py                                 # 统一入口，按 URL 自动路由
+ruff check .                                         # 静态检查（先 pip install ruff）
 ```
 
-根目录 conftest.py 会把项目根加入 sys.path，裸 `pytest -q` 与 `python -m pytest -q` 均可用。当前 431 个测试全部通过（已验证）。
+根目录 conftest.py 会把项目根加入 sys.path，裸 `pytest -q` 与 `python -m pytest -q` 均可用。静态检查用 ruff（配置 ruff.toml，只选 F/E9/W/B 等 bug 类规则，不做风格重排），当前全绿。
 
 ## 下载器架构
 
@@ -102,7 +104,7 @@ python downloader.py                                 # 统一入口，按 URL �
 
 ## 测试
 
-pytest 是唯一框架，431 个测试全部离线（不联网）。测试位于 `tests/test_<模块>.py`，文件名与模块一一对应，只覆盖纯函数：`get_site_name`、`resolve_uploader`、`build_ydl_opts`、`dispatch_url`（含 douyin /note//video/ 路由）、`diagnose_error`、`resolve_short_link`、`detect_risk_control`、`detect_note_not_found`、`detect_missing_xsec_token`、`extract_xhs_author`、`extract_image_url`、`extract_video_url`（含多画质流选择）、`extract_live_photo_stream`、`ensure_https`、`_is_transient_error`、`_is_block_status`、`fetch_page`、`_is_decorative_name`、`download_file`（注入假 session）、`get_image_dimensions`（Pillow 生成真实图片）、`extract_url_numeric_id`、`make_page_dir_name`、`collect_media_urls`（构造 HTML 字符串）、`build_media_tasks`、`extract_page_author`、`detect_jsvm_challenge`、`parse_pace_f_detail`/`parse_render_data`/`extract_aweme_detail`/`extract_douyin_image_url`/`extract_douyin_author`/`resolve_douyin_basename`（构造页面 fixture）、`is_douyin_video_url`/`build_signed_detail_url`（websign md5 预签名重算）/`extract_video_play_urls`（video fixture）；vendored 签名栈 `douyin_sm3`（GB 向量）/`douyin_websign`（编码语义+md5 公式）/`douyin_abogus`（固定种子黄金值）、`mux_motion_photo`/`digest_motion_photo`（live_photo mux 往返）、`_parse_response_blocks`/`CurlResponse`（http_client 降级路径）、sanitize/build_download_dir/unique_path/cookie_header_to_netscape/cookie_text_to_header 等。另有 `tests/test_module_boundary.py` 固化 core/telegram 单向边界（core 源码无 telegram import、import core.downloader 不会带入 telegram 包）。新增 URL 或解析分支时按 `tests/test_sites.py` 的方式用参数化用例；新的公共函数应附带测试。提交前跑 `python -m pytest -q`。
+pytest 是唯一框架，测试全部离线（不联网）。测试位于 `tests/test_<模块>.py`，文件名与模块一一对应，只覆盖纯函数：`get_site_name`、`resolve_uploader`、`build_ydl_opts`、`dispatch_url`（含 douyin /note//video/ 路由）、`diagnose_error`、`resolve_short_link`、`detect_risk_control`、`detect_note_not_found`、`detect_missing_xsec_token`、`extract_xhs_author`、`extract_image_url`、`extract_video_url`（含多画质流选择）、`extract_live_photo_stream`、`ensure_https`、`_is_transient_error`、`_is_block_status`、`fetch_page`、`_is_decorative_name`、`download_file`（注入假 session）、`get_image_dimensions`（Pillow 生成真实图片）、`extract_url_numeric_id`、`make_page_dir_name`、`collect_media_urls`（构造 HTML 字符串）、`build_media_tasks`、`extract_page_author`、`detect_jsvm_challenge`、`parse_pace_f_detail`/`parse_render_data`/`extract_aweme_detail`/`extract_douyin_image_url`/`extract_douyin_author`/`resolve_douyin_basename`（构造页面 fixture）、`is_douyin_video_url`/`build_signed_detail_url`（websign md5 预签名重算）/`extract_video_play_urls`（video fixture）；vendored 签名栈 `douyin_sm3`（GB 向量）/`douyin_websign`（编码语义+md5 公式）/`douyin_abogus`（固定种子黄金值）、`mux_motion_photo`/`digest_motion_photo`（live_photo mux 往返）、`_parse_response_blocks`/`CurlResponse`（http_client 降级路径）、sanitize/build_download_dir/unique_path/cookie_header_to_netscape/cookie_text_to_header 等。另有 `tests/test_module_boundary.py` 固化 core/telegram 单向边界（core 源码无 telegram import、import core.downloader 不会带入 telegram 包）。新增 URL 或解析分支时按 `tests/test_sites.py` 的方式用参数化用例；新的公共函数应附带测试。提交前跑 `python -m pytest -q` 与 `ruff check .`。
 
 ## Cookie 与安全
 

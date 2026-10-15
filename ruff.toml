@@ -1,0 +1,5 @@
+# ruff 静态检查：只开 bug 类规则，不做风格重排（仓库风格见 AGENTS.md）
+target-version = "py313"
+
+[lint]
+select = ["F", "E9", "W", "B"]

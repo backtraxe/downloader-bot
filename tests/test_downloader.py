@@ -47,7 +47,6 @@ class TestBuildYdlOptsAuthor:
 
     def test_cookiefile_none_when_no_cookie_file(self, tmp_path, monkeypatch):
         # cookie 文件不存在 → 不传 cookiefile，避免 yt-dlp 警告
-        from core.sites import cookie_file_for
         monkeypatch.setattr("core.downloader.cookie_file_for", lambda s: str(tmp_path / "absent.txt"))
         opts = build_ydl_opts("bilibili")
         assert opts["cookiefile"] is None
