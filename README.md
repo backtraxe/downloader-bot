@@ -36,7 +36,7 @@ python downloader.py
 - 通用抓取会自动过滤站点装饰图（logo/头像/二维码/表情等）：文件名含装饰关键词的直接跳过，尺寸过小（短边 <300px）的落盘后删除
 - 短链（`b23.tv` / `v.douyin.com` / `youtu.be` / `t.co` / `instagr.am` 等）会自动展开为最终直链后再下载，避免 DNS 解析失败
 
-三个下载脚本也可单独运行（`python xhs_downloader.py` / `python 1024_downloader.py`），行为与统一入口一致。
+三个站点下载脚本也可单独运行（`python xhs_downloader.py` / `python douyin_downloader.py` / `python 1024_downloader.py`），行为与统一入口一致。
 
 #### 小红书后端
 
@@ -58,7 +58,7 @@ python live_photo.py "download/xiaohongshu/<作者>/<标题>_<noteId>"
 
 #### 抖音图文笔记后端
 
-- 抖音图文笔记（`douyin.com/note/<id>`，App 分享文案常见）yt-dlp 不支持，由 `douyin_downloader.py` 手写解析：带登录 Cookie 请求笔记页，从内嵌的 `RENDER_DATA`（或 `_ROUTER_DATA`）JSON 中提取图片列表与视频
+- 抖音图文笔记（`douyin.com/note/<id>`，App 分享文案常见）yt-dlp 不支持，由 `core/douyin_downloader.py` 手写解析：带登录 Cookie 请求笔记页，从页面内嵌的 pace_f 流式数据块（新版页面主路径；旧版 `RENDER_DATA`/`_ROUTER_DATA` 兜底）中提取图片列表与视频
 - **必须填有效登录态 Cookie** 到 `cookies/douyin.txt`：无 Cookie 时抖音返回 jsvm 反爬挑战页，脚本会识别并提示；Netscape 格式和浏览器复制的 `Cookie:` 请求头整段都能吃（脚本自动识别转换），与 yt-dlp 侧共用同一个文件
 - 图片默认下载**无水印最高档**（避开 `dy-water` 水印流水线，同档 q75 中 jpeg 优先）；与网页端浏览完全同源；输出 `download/douyin/[<作者>/]<标题>_<awemeId>/`，图片按 `001.jpg` 序号命名，实况图视频同序号配对 `001.mp4`，笔记级视频为 `video.mp4`
 - **抖音视频链接（`/video/<id>`）走签名 detail API**：2026-08/09 起视频详情接口（`aweme/v1/web/aweme/detail/`）启用了 JS 风控签名校验（Argus），yt-dlp 无签名整拦（报"Fresh cookies needed"误导为 Cookie 过期）；页面也不内嵌视频数据（pace_f 里 `aweme: null`）。本仓库补齐纯本地三件套签名后直连该 API——a_bogus（bdms.js 逆向）+ 伪 msToken + x-secsdk-web-signature（md5），算法移植自 [Evil0ctal/Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API)（Apache-2.0）。**服务端门禁（2026-10 对照矩阵实测）= Cookie 含 `UIFID`（签名素材，值不校验）+ 有效 `ttwid` 或 `sessionid` 至少其一**；缺 UIFID 是 403，凭据失效是持续 `200 空响应`（脚本会识别并提示刷新 Cookie）。播放地址取网页播放端无水印 CDN 净版，输出 `download/douyin/[<作者>/]<标题>_<awemeId>.mp4`
@@ -67,7 +67,7 @@ python live_photo.py "download/xiaohongshu/<作者>/<标题>_<noteId>"
 #### 通用网页后端
 
 - 使用 `curl_cffi` 的 `impersonate="chrome110"` 做 TLS 指纹伪装，绕过防盗链 / CDN 拦截
-- `curl_cffi` 不可用时自动降级为系统 `curl` 命令（由 `http_client.py` 统一封装，跟随 30x 重定向），Termux 等环境同样可用
+- `curl_cffi` 不可用时自动降级为系统 `curl` 命令（由 `core/http_client.py` 统一封装，跟随 30x 重定向），Termux 等环境同样可用
 - 被站点 WAF 拦截（HTTP 429 / 5xx，如腾讯云 EdgeOne 的 567 拦截页）或网络异常时自动退避重试最多 3 次
 - 深度扫描 `<img>/<source>/<video>` 的懒加载属性（`data-src`、`data-original`、`ess-data` 等）、`<a href>` 直链、以及行内 `style` 中的 `background-image`
 - 能识别 `正文 来自 作者 - 站点` 标题模式的页面自动提取作者，目录带作者层
@@ -77,6 +77,7 @@ python live_photo.py "download/xiaohongshu/<作者>/<标题>_<noteId>"
 
 - `download/` — 下载输出目录（已 gitignore）
 - `cookies/` — 各站点 Cookie 文件，命名规则为 `cookies/<站点名>.txt`（已 gitignore）
+- `telegram.json` — Telegram 配置（已 gitignore，见"上传到 Telegram"节；不用该功能无需关心）
 
 ## 获取 Cookie
 
@@ -97,7 +98,7 @@ yt-dlp 的 `cookiefile` 读取的是 **Netscape cookie 文件**（每行一个 c
 获取方式（任选其一）：
 
 1. **浏览器扩展导出（最省事）**：安装 [Get cookies.txt](https://chromewebstore.google.com/detail/get-cookiestxt-locally/97mihbckbjnpjbkmbigfgejebkmjnlnk) 等扩展，登录目标站点后导出为 `.txt`，内容直接粘进 `cookies/<站点名>.txt`。
-2. **yt-dlp 直接从浏览器读取**（无需手动填文件）：在 `downloader.py` 的 `build_ydl_opts` 里加 `"cookiesfrombrowser": ("chrome",)`（支持 `chrome`/`firefox`/`edge`/`safari` 等），需关掉浏览器进程。
+2. **yt-dlp 直接从浏览器读取**（无需手动填文件）：在 `core/downloader.py` 的 `build_ydl_opts` 里加 `"cookiesfrombrowser": ("chrome",)`（支持 `chrome`/`firefox`/`edge`/`safari` 等），需关掉浏览器进程。
 3. **从抓包/手头的 `Cookie:` 头字符串转换**：若你只有请求头字符串（移动端抓包常见），用本仓库自带的转换函数生成 Netscape 文件：
 
    ```bash
@@ -170,6 +171,17 @@ iOS 没有 DevTools，也**无法**用“快捷指令”读取 Safari 的 Cookie
 - 小红书除登录外，链接本身仍需带 `xsec_token`（2026-10 起裸 `explore/<id>` 链接一律 404，与 Cookie 无关）；从 App 分享的短链自带该参数。
 - bilibili 的 Cookie 仅在下不了高清/大会员画质时才需要更新，普通视频可空。
 
+### 手机号验证码半自动登录（cookie_login.py，可选）
+
+不想手动导 Cookie 时，用 Playwright 半自动登录刷新（需 `pip install playwright && playwright install chromium`）：
+
+```bash
+python cookie_login.py douyin                 # 无头自动完成到「输入短信验证码」，终端输入即可
+python cookie_login.py xiaohongshu --headed   # 遇滑块/人机校验时弹窗手动完成（可扫码）
+```
+
+登录成功后自动按站点所需格式写入 `cookies/<站点>.txt`，支持 douyin / xiaohongshu / bilibili。
+
 ### 关于抖音 / 小红书 / Instagram 的 App
 
 这些 App 使用 **SSL Pinning**（证书绑定），即使装了抓包根证书也会拒绝 TLS 握手，**普通抓包拿不到 Cookie**。可行路径：
@@ -213,7 +225,7 @@ python tg_upload.py download/xiaohongshu/某作者/某笔记_xxx/   # 直发模�
 
 curl_cffi 核心是编译好的 C 扩展，PyPI 只发 glibc/macOS/Windows 的预编译 wheel——Android 是 Bionic libc，装不上或装上后被 Termux 的 Python 滚动升级（3.13→3.14）震碎 ABI。tur 第三方源也没有 curl-impersonate 系包。三个解决方案（按推荐排序）：
 
-1. **什么都不用做（当前默认）**：`http_client.py` 自动降级系统 curl，只加 `--http2` + 完整 Chrome 请求头。2026-10 实测抖音签名 API / 小红书 / bilibili 全链路均不校验 JA3 指纹，伪装收益为零。
+1. **什么都不用做（当前默认）**：`core/http_client.py` 自动降级系统 curl，只加 `--http2` + 完整 Chrome 请求头。2026-10 实测抖音签名 API / 小红书 / bilibili 全链路均不校验 JA3 指纹，伪装收益为零。
 2. **源码重建**：`bash setup_termux.sh`（内含检测 + `pip install --force-reinstall curl_cffi`）。编过即恢复 chrome150 指纹；编不过自动保持降级，功能无损。
 3. **proot-distro 一劳永逸**：`pkg install proot-distro && proot-distro install debian`，进 Debian（glibc aarch64）后 `pip install -r requirements.txt` 直接命中 manylinux wheel，且 Debian 的 Python 由 apt 钉版不漂移。在 `/sdcard` 下 clone 并运行，下载产物直接进共享存储。
 

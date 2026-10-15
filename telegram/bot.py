@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Telegram 下载机器人（长轮询常驻，Termux 后台跑）。
 
-完整闭环：聊天里发链接 → 调 downloader.dispatch_url 下载 → 把产物
+完整闭环：聊天里发链接 → 调 core.downloader.dispatch_url 下载 → 把产物
 （图片相册 / 视频 / 原文件）回传到同一聊天，caption 带 `#作者` `#站点`
 标签——Telegram 原生可点击、可搜索，方便日后按作者翻记录。
 

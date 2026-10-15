@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """站点识别与 Cookie 管理。
 
-被 downloader.py(统一入口)与 xhs_downloader.py 共用，
-保证 URL→站点名 的映射在两处一致。
+被 core 内各下载模块共用，保证 URL→站点名 的映射全 core 口径一致。
 """
 import logging
 import os

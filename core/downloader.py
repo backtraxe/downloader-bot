@@ -3,8 +3,9 @@
 
 按 URL 自动识别站点并分发到对应下载器：
   - xiaohongshu → xhs_downloader（手写 __INITIAL_STATE__ 解析）
-  - 抖音图文笔记（/note/）→ douyin_downloader（手写 RENDER_DATA 解析）
-  - bilibili / douyin 视频 / youtube / instagram / twitter → yt-dlp
+  - 抖音图文笔记（/note/）→ douyin_downloader（pace_f 手写解析，拦截时签名 API 兜底）
+  - 抖音视频（/video/）→ douyin_downloader（签名 detail API）
+  - bilibili / youtube / instagram / twitter → yt-dlp
   - 其他站点 → 1024_downloader（通用静态网页抓取）
 
 用法：
