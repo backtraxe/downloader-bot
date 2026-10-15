@@ -11,6 +11,7 @@ config.json 不只服务于 Telegram：任何需要用户级配置的模块都�
 等价于 {"telegram": <其内容>}；两者都没有时写模板并返回 None，由调用方
 打印指引退出。路径均为 CWD 相对（脚本一律从仓库根运行）。
 """
+
 import json
 import os
 

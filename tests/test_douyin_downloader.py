@@ -6,6 +6,7 @@ fixture 结构来自 2026 年真实 douyin.com/note 页面：
   字段 camelCase（awemeId/images[].downloadUrlList/authorInfo）
 - 旧版 RENDER_DATA 页：详情在 JSON，字段 snake_case（aweme_id/download_url_list/author）
 """
+
 import json
 from urllib.parse import quote
 
@@ -33,12 +34,16 @@ def _make_camel_detail():
         "desc": "没关系 一个人也能走很远的路。#一个人拍照 #清冷感",
         "authorInfo": {"nickname": "偏等落叶", "uniqueId": "photo_x"},
         "images": [
-            {"uri": "tos-cn-i-0813/abc",
-             "downloadUrlList": ["https://p3-sign.douyinpic.com/img1.jpg"],
-             "urlList": ["https://p3-sign.douyinpic.com/img1_small.jpg"]},
+            {
+                "uri": "tos-cn-i-0813/abc",
+                "downloadUrlList": ["https://p3-sign.douyinpic.com/img1.jpg"],
+                "urlList": ["https://p3-sign.douyinpic.com/img1_small.jpg"],
+            },
             {"urlList": ["https://p3-sign.douyinpic.com/img2.jpg"]},
-            {"urlList": ["https://p3-sign.douyinpic.com/img3.jpg"],
-             "video": {"playAddr": {"urlList": ["https://v.example.com/live3.mp4"]}}},
+            {
+                "urlList": ["https://p3-sign.douyinpic.com/img3.jpg"],
+                "video": {"playAddr": {"urlList": ["https://v.example.com/live3.mp4"]}},
+            },
         ],
         "video": {"playAddr": {"urlList": ["https://v.example.com/note.mp4"]}},
     }
@@ -50,8 +55,12 @@ def _make_snake_detail():
         "aweme_id": "7666381907030529443",
         "desc": "旧结构笔记",
         "author": {"nickname": "旧作者", "unique_id": "old"},
-        "images": [{"download_url_list": ["http://p3.example.com/old1.jpg"],
-                    "url_list": ["http://p3.example.com/old1_small.jpg"]}],
+        "images": [
+            {
+                "download_url_list": ["http://p3.example.com/old1.jpg"],
+                "url_list": ["http://p3.example.com/old1_small.jpg"],
+            }
+        ],
         "video": {"play_addr": {"url_list": ["http://v.example.com/old.mp4"]}},
     }
 
@@ -64,38 +73,50 @@ def _make_pace_f_html(detail):
     )
     # JS 字符串字面量内容（外层引号由页面原样携带）：对 " 与 \ 转义
     chunk = flight.replace("\\", "\\\\").replace('"', '\\"')
-    return f'<html><body><script>self.__pace_f.push([1,"{chunk}"])</script></body></html>'
+    return (
+        f'<html><body><script>self.__pace_f.push([1,"{chunk}"])</script></body></html>'
+    )
 
 
 def _html_with_render_data(payload):
-    return ('<html><body><script id="RENDER_DATA" type="application/json">'
-            + quote(json.dumps(payload, ensure_ascii=False))
-            + "</script></body></html>")
+    return (
+        '<html><body><script id="RENDER_DATA" type="application/json">'
+        + quote(json.dumps(payload, ensure_ascii=False))
+        + "</script></body></html>"
+    )
 
 
 # ---------------- is_douyin_note_url ----------------
 
+
 class TestIsDouyinNoteUrl:
-    @pytest.mark.parametrize("url", [
-        "https://www.douyin.com/note/7666381907030529443",
-        "https://www.douyin.com/note/7666381907030529443?previous_page=web_code_link",
-        "http://douyin.com/note/12345",
-    ])
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.douyin.com/note/7666381907030529443",
+            "https://www.douyin.com/note/7666381907030529443?previous_page=web_code_link",
+            "http://douyin.com/note/12345",
+        ],
+    )
     def test_note_urls(self, url):
         assert is_douyin_note_url(url) is True
 
-    @pytest.mark.parametrize("url", [
-        "https://www.douyin.com/video/7666381907030529443",
-        "https://v.douyin.com/BZjp8nC95xM/",       # 短链需展开后才能判定
-        "https://www.douyin.com/user/MS4wLjA",
-        "",                                         # 空串
-        None,                                       # None
-    ])
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.douyin.com/video/7666381907030529443",
+            "https://v.douyin.com/BZjp8nC95xM/",  # 短链需展开后才能判定
+            "https://www.douyin.com/user/MS4wLjA",
+            "",  # 空串
+            None,  # None
+        ],
+    )
     def test_non_note_urls(self, url):
         assert is_douyin_note_url(url) is False
 
 
 # ---------------- detect_jsvm_challenge ----------------
+
 
 class TestDetectJsvmChallenge:
     def test_challenge_page_detected(self):
@@ -113,6 +134,7 @@ class TestDetectJsvmChallenge:
 
 
 # ---------------- parse_render_data ----------------
+
 
 class TestParseRenderData:
     def test_render_data_script(self):
@@ -141,6 +163,7 @@ class TestParseRenderData:
 
 # ---------------- parse_pace_f_detail（新版页面主路径） ----------------
 
+
 class TestParsePaceFDetail:
     def test_pace_f_chunk_parsed(self):
         detail = _make_camel_detail()
@@ -168,6 +191,7 @@ class TestParsePaceFDetail:
 
 # ---------------- extract_note_detail（总入口） ----------------
 
+
 class TestExtractNoteDetail:
     def test_pace_f_path_priority_fallback(self):
         # RENDER_DATA 无详情（新版页面里它只是 app 配置）→ 落到 pace_f
@@ -190,6 +214,7 @@ class TestExtractNoteDetail:
 
 # ---------------- extract_aweme_detail ----------------
 
+
 class TestExtractAwemeDetail:
     def test_snake_case_detail(self):
         detail = _make_snake_detail()
@@ -198,7 +223,9 @@ class TestExtractAwemeDetail:
 
     def test_camel_case_detail(self):
         detail = _make_camel_detail()
-        data = {"loaderData": {"note_(id)/page": {"videoInfoRes": {"item_list": [detail]}}}}
+        data = {
+            "loaderData": {"note_(id)/page": {"videoInfoRes": {"item_list": [detail]}}}
+        }
         assert extract_aweme_detail(data) is detail
 
     def test_detail_without_media_is_not_matched(self):
@@ -211,6 +238,7 @@ class TestExtractAwemeDetail:
 
 
 # ---------------- extract_douyin_image_url ----------------
+
 
 class TestExtractDouyinImageUrl:
     def test_camel_prefers_download_url_list(self):
@@ -233,10 +261,13 @@ class TestExtractDouyinImageUrl:
         assert extract_douyin_image_url({}) is None
         assert extract_douyin_image_url({"urlList": []}) is None
         # 非 http 开头的条目跳过（防 data: 等）
-        assert extract_douyin_image_url({"urlList": ["data:image/png;base64,xx"]}) is None
+        assert (
+            extract_douyin_image_url({"urlList": ["data:image/png;base64,xx"]}) is None
+        )
 
 
 # ---------------- extract_live_photo_url ----------------
+
 
 class TestExtractLivePhotoUrl:
     def test_camel_play_addr(self):
@@ -245,7 +276,14 @@ class TestExtractLivePhotoUrl:
 
     def test_play_addr_as_string_list(self):
         # 新版 playAddr 也可能是纯字符串列表
-        img = {"video": {"playAddr": ["https://v.example.com/a.mp4", "https://v.example.com/b.mp4"]}}
+        img = {
+            "video": {
+                "playAddr": [
+                    "https://v.example.com/a.mp4",
+                    "https://v.example.com/b.mp4",
+                ]
+            }
+        }
         assert extract_live_photo_url(img) == "https://v.example.com/a.mp4"
 
     def test_snake_case(self):
@@ -259,6 +297,7 @@ class TestExtractLivePhotoUrl:
 
 
 # ---------------- extract_note_video_url ----------------
+
 
 class TestExtractNoteVideoUrl:
     def test_camel_play_addr(self):
@@ -288,6 +327,7 @@ class TestExtractNoteVideoUrl:
 
 # ---------------- extract_douyin_author ----------------
 
+
 class TestExtractDouyinAuthor:
     def test_camel_author_info(self):
         assert extract_douyin_author(_make_camel_detail()) == "偏等落叶"
@@ -305,6 +345,7 @@ class TestExtractDouyinAuthor:
 
 
 # ---------------- resolve_douyin_basename ----------------
+
 
 class TestResolveDouyinBasename:
     def test_uses_desc(self):
@@ -342,7 +383,7 @@ class TestDetectJsvmChallengeCaptchaPage:
         assert detect_jsvm_challenge(html) is False
 
     def test_jsvm_challenge_still_detected(self):
-        html = '<body></body><script>var glb;(glb=x)._$jsvmprt=function(){}</script>'
+        html = "<body></body><script>var glb;(glb=x)._$jsvmprt=function(){}</script>"
         assert detect_jsvm_challenge(html) is True
 
 
@@ -375,9 +416,14 @@ class TestFetchPageCaptchaRetry:
 
     def test_captcha_retried_until_pass(self, monkeypatch):
         import core.douyin_downloader as dd
+
         monkeypatch.setattr("core.douyin_downloader.time.sleep", lambda s: None)
-        session = self._FakeSession([self._CAPTCHA, self._CAPTCHA, "正常页面 __pace_f 数据"])
-        monkeypatch.setattr("core.douyin_downloader.http_client.Session", lambda: session)
+        session = self._FakeSession(
+            [self._CAPTCHA, self._CAPTCHA, "正常页面 __pace_f 数据"]
+        )
+        monkeypatch.setattr(
+            "core.douyin_downloader.http_client.Session", lambda: session
+        )
         r = dd._fetch_page(session, "https://www.douyin.com/note/123", {})
         assert r is not None
         assert "__pace_f" in r.text
@@ -386,9 +432,12 @@ class TestFetchPageCaptchaRetry:
     def test_captcha_exhausted_returns_last_response(self, monkeypatch):
         # 重试用尽仍全命中：返回最后响应（由调用方给出限流提示），不返回 None
         import core.douyin_downloader as dd
+
         monkeypatch.setattr("core.douyin_downloader.time.sleep", lambda s: None)
         session = self._FakeSession([self._CAPTCHA] * 5)
-        monkeypatch.setattr("core.douyin_downloader.http_client.Session", lambda: session)
+        monkeypatch.setattr(
+            "core.douyin_downloader.http_client.Session", lambda: session
+        )
         r = dd._fetch_page(session, "https://www.douyin.com/note/123", {})
         assert r is not None
         assert "验证码中间页" in r.text
@@ -429,6 +478,7 @@ class TestFetchAwemeDetail:
 
     def _run(self, monkeypatch, session):
         import core.douyin_downloader as dd
+
         monkeypatch.setattr("core.douyin_downloader.time.sleep", lambda s: None)
         return dd.fetch_aweme_detail("7691296880559540623", "ttwid=x", session)
 
@@ -472,10 +522,15 @@ class TestExtractDouyinImageUrlWatermarkFilter:
 
     def test_watermark_variant_skipped(self):
         img = {
-            "downloadUrlList": ["https://p3-sign.example.com/x~tplv-dy-water-v2:abc.webp"],
+            "downloadUrlList": [
+                "https://p3-sign.example.com/x~tplv-dy-water-v2:abc.webp"
+            ],
             "urlList": ["https://p3-sign.example.com/x~tplv-dy-aweme-images:q75.webp"],
         }
-        assert extract_douyin_image_url(img) == "https://p3-sign.example.com/x~tplv-dy-aweme-images:q75.webp"
+        assert (
+            extract_douyin_image_url(img)
+            == "https://p3-sign.example.com/x~tplv-dy-aweme-images:q75.webp"
+        )
 
     def test_jpeg_preferred_over_webp_when_same_quality_tier(self):
         # 真实页面的无水印端是 q75.webp + q75.jpeg 同档双格式——jpeg 保真上限更高
@@ -486,41 +541,61 @@ class TestExtractDouyinImageUrlWatermarkFilter:
                 "https://x.example.com/a~tplv-dy-aweme-images:q75.jpeg",
             ],
         }
-        assert extract_douyin_image_url(img) == "https://x.example.com/a~tplv-dy-aweme-images:q75.jpeg"
+        assert (
+            extract_douyin_image_url(img)
+            == "https://x.example.com/a~tplv-dy-aweme-images:q75.jpeg"
+        )
 
     def test_all_watermark_falls_back_to_first(self):
         # 全是水印版时宁可用水印版也不能没图
         img = {"urlList": ["https://x.example.com/a~tplv-dy-water-v2:a"]}
-        assert extract_douyin_image_url(img) == "https://x.example.com/a~tplv-dy-water-v2:a"
+        assert (
+            extract_douyin_image_url(img)
+            == "https://x.example.com/a~tplv-dy-water-v2:a"
+        )
 
     def test_only_download_list_watermark_filtered(self):
-        img = {"downloadUrlList": ["https://x.example.com/a~tplv-dy-water-v2:a"],
-               "urlList": []}
+        img = {
+            "downloadUrlList": ["https://x.example.com/a~tplv-dy-water-v2:a"],
+            "urlList": [],
+        }
         # 有水印 fallback 仍然存在
-        assert extract_douyin_image_url(img) == "https://x.example.com/a~tplv-dy-water-v2:a"
+        assert (
+            extract_douyin_image_url(img)
+            == "https://x.example.com/a~tplv-dy-water-v2:a"
+        )
 
 
 # ---------------- 视频（/video/）签名详情 API 链路 ----------------
 
+
 class TestIsDouyinVideoUrl:
-    @pytest.mark.parametrize("url", [
-        "https://www.douyin.com/video/7556303777536740671",
-        "https://www.douyin.com/video/7556303777536740671?previous_page=web_code_link",
-        "http://douyin.com/video/12345",
-    ])
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.douyin.com/video/7556303777536740671",
+            "https://www.douyin.com/video/7556303777536740671?previous_page=web_code_link",
+            "http://douyin.com/video/12345",
+        ],
+    )
     def test_video_urls(self, url):
         from core.douyin_downloader import is_douyin_video_url
+
         assert is_douyin_video_url(url) is True
 
-    @pytest.mark.parametrize("url", [
-        "https://www.douyin.com/note/7666381907030529443",
-        "https://v.douyin.com/BZjp8nC95xM/",
-        "https://www.douyin.com/user/MS4wLjA",
-        "",
-        None,
-    ])
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.douyin.com/note/7666381907030529443",
+            "https://v.douyin.com/BZjp8nC95xM/",
+            "https://www.douyin.com/user/MS4wLjA",
+            "",
+            None,
+        ],
+    )
     def test_non_video_urls(self, url):
         from core.douyin_downloader import is_douyin_video_url
+
         assert is_douyin_video_url(url) is False
 
 
@@ -530,20 +605,31 @@ class TestBuildSignedDetailUrl:
     x-secsdk-web-signature 是解密 Argus 403 "Uifid Not Found" 的关键
     （2026-10-14 实测：yt-dlp 缺它在 detail API 一律 403）。
     """
+
     _COOKIES = {"UIFID_TEMP": "uid_test_123", "s_v_web_id": "verify_test_x"}
 
     def _url_and_headers(self):
         from core.douyin_downloader import build_signed_detail_url
+
         return build_signed_detail_url("7556303777536740671", self._COOKIES)
 
     def test_carries_required_params(self):
         from urllib.parse import parse_qs, urlsplit
+
         url, _ = self._url_and_headers()
         q = parse_qs(urlsplit(url).query)
         assert urlsplit(url).path.endswith("/aweme/v1/web/aweme/detail/")
-        for key in ("aweme_id", "aid", "msToken", "a_bogus",
-                    "verifyFp", "fp", "uifid", "timestamp",
-                    "x-secsdk-web-signature"):
+        for key in (
+            "aweme_id",
+            "aid",
+            "msToken",
+            "a_bogus",
+            "verifyFp",
+            "fp",
+            "uifid",
+            "timestamp",
+            "x-secsdk-web-signature",
+        ):
             assert key in q, f"缺少签名参数 {key}"
         assert q["aweme_id"] == ["7556303777536740671"]
         assert q["aid"] == ["6383"]
@@ -557,6 +643,7 @@ class TestBuildSignedDetailUrl:
 
     def test_websign_md5_matches_preimage(self):
         import hashlib
+
         url, extra_headers = self._url_and_headers()
         query = url.split("?", 1)[1]
         marker = "&x-secsdk-web-signature="
@@ -564,8 +651,8 @@ class TestBuildSignedDetailUrl:
         body, sig = query.rsplit(marker, 1)
         ts = dict(p.split("=", 1) for p in body.split("&")).get("timestamp")
         from core.douyin_websign import SALT
-        expected = hashlib.md5(
-            f"uid_test_123_{ts}_{SALT}_{body}".encode()).hexdigest()
+
+        expected = hashlib.md5(f"uid_test_123_{ts}_{SALT}_{body}".encode()).hexdigest()
         assert sig == expected
         # 同名参数也复制进请求头（页面自己的行为，更像真浏览器）
         assert extra_headers["x-secsdk-web-signature"] == sig
@@ -574,6 +661,7 @@ class TestBuildSignedDetailUrl:
     def test_missing_uifid_falls_back_to_unsigned(self):
         # 没有 UIFID 时仍给出 a_bogus 签名 URL（未保护端点可用），但不伪造 websign
         from core.douyin_downloader import build_signed_detail_url
+
         url, extra_headers = build_signed_detail_url("1", {"s_v_web_id": "x"})
         assert "a_bogus=" in url
         assert "x-secsdk-web-signature=" not in url
@@ -585,10 +673,15 @@ class TestExtractVideoPlayUrls:
 
     def test_play_addr_url_list_in_order(self):
         from core.douyin_downloader import extract_video_play_urls
-        video = {"play_addr": {"url_list": [
-            "https://v26-web.douyinvod.com/a",
-            "https://www.douyin.com/aweme/v1/play/?x",
-        ]}}
+
+        video = {
+            "play_addr": {
+                "url_list": [
+                    "https://v26-web.douyinvod.com/a",
+                    "https://www.douyin.com/aweme/v1/play/?x",
+                ]
+            }
+        }
         assert extract_video_play_urls(video) == [
             "https://v26-web.douyinvod.com/a",
             "https://www.douyin.com/aweme/v1/play/?x",
@@ -596,15 +689,20 @@ class TestExtractVideoPlayUrls:
 
     def test_watermark_candidates_filtered(self):
         from core.douyin_downloader import extract_video_play_urls
-        video = {"play_addr": {"url_list": [
-            "https://a.example.com/playwm/x",
-            "https://v26-web.douyinvod.com/clean",
-        ]}}
-        assert extract_video_play_urls(video) == [
-            "https://v26-web.douyinvod.com/clean"]
+
+        video = {
+            "play_addr": {
+                "url_list": [
+                    "https://a.example.com/playwm/x",
+                    "https://v26-web.douyinvod.com/clean",
+                ]
+            }
+        }
+        assert extract_video_play_urls(video) == ["https://v26-web.douyinvod.com/clean"]
 
     def test_falls_back_to_bit_rate(self):
         from core.douyin_downloader import extract_video_play_urls
+
         video = {
             "play_addr": {"url_list": []},
             "bit_rate": [
@@ -616,5 +714,6 @@ class TestExtractVideoPlayUrls:
 
     def test_empty_video_returns_empty(self):
         from core.douyin_downloader import extract_video_play_urls
+
         assert extract_video_play_urls({}) == []
         assert extract_video_play_urls(None) == []

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """telegram/upload.py 纯函数与流程测试（假 session，不联网）"""
+
 import json
 import os
 
@@ -28,13 +29,16 @@ class _Session:
     """记录调用并按队列返回响应。"""
 
     def __init__(self, payloads=None):
-        self.calls = []          # (url, data_keys, file_fields, file_paths)
+        self.calls = []  # (url, data_keys, file_fields, file_paths)
         self._payloads = list(payloads or [])
 
     def post_files(self, url, data=None, files=None, timeout=None):
         self.calls.append((url, data or {}, files or {}))
-        payload = self._payloads.pop(0) if self._payloads else \
-            {"ok": True, "result": {"message_id": 1}}
+        payload = (
+            self._payloads.pop(0)
+            if self._payloads
+            else {"ok": True, "result": {"message_id": 1}}
+        )
         if callable(payload):
             raise payload()  # 网络异常模拟
         return _Resp(payload)
@@ -53,6 +57,7 @@ _CFG = {"bot_token": "123:abc", "chat_id": 42}
 
 
 # ---------------- load_config ----------------
+
 
 class TestLoadConfig:
     def test_missing_writes_template_and_returns_none(self, tmp_path):
@@ -81,6 +86,7 @@ class TestLoadConfig:
 
 # ---------------- collect_media / plan_uploads ----------------
 
+
 class TestCollectAndPlan:
     def test_collect_dir_sorted_ignores_hidden(self, tmp_path):
         _touch(tmp_path / "002.jpg")
@@ -108,7 +114,9 @@ class TestCollectAndPlan:
         sizes = {heic: 1024, big: 11 * 1024 * 1024}
         ops = plan_uploads([heic, big], size_of=sizes.get)
         assert [(k, os.path.basename(v)) for k, v in ops] == [
-            ("document", "001.heic"), ("document", "002.jpg")]
+            ("document", "001.heic"),
+            ("document", "002.jpg"),
+        ]
 
     def test_video_and_too_big(self, tmp_path):
         v = _touch(tmp_path / "video.mp4")
@@ -123,8 +131,12 @@ class TestCollectAndPlan:
         assert [k for k, _ in ops] == ["document"]
 
     def test_interleaved_photos_split_albums(self, tmp_path):
-        files = [_touch(tmp_path / "a.jpg"), _touch(tmp_path / "b.jpg"),
-                 _touch(tmp_path / "v.mp4"), _touch(tmp_path / "c.jpg")]
+        files = [
+            _touch(tmp_path / "a.jpg"),
+            _touch(tmp_path / "b.jpg"),
+            _touch(tmp_path / "v.mp4"),
+            _touch(tmp_path / "c.jpg"),
+        ]
         ops = plan_uploads(files)
         assert [k for k, _ in ops] == ["album", "video", "album"]
         assert len(ops[0][1]) == 2 and len(ops[2][1]) == 1
@@ -132,18 +144,24 @@ class TestCollectAndPlan:
 
 # ---------------- call_api 重试 ----------------
 
+
 class TestCallApi:
     def test_429_retried_with_retry_after(self, monkeypatch):
         monkeypatch.setattr("telegram.upload.time.sleep", lambda s: None)
-        s = _Session([
-            {"ok": False, "error_code": 429,
-             "description": "Too Many Requests",
-             "parameters": {"retry_after": 1}},
-            {"ok": True, "result": {"message_id": 7}},
-        ])
+        s = _Session(
+            [
+                {
+                    "ok": False,
+                    "error_code": 429,
+                    "description": "Too Many Requests",
+                    "parameters": {"retry_after": 1},
+                },
+                {"ok": True, "result": {"message_id": 7}},
+            ]
+        )
         from telegram import upload as upload_mod
-        result = upload_mod.call_api(s, _CFG, "sendPhoto", {},
-                                    _sleep=lambda x: None)
+
+        result = upload_mod.call_api(s, _CFG, "sendPhoto", {}, _sleep=lambda x: None)
         assert result == {"message_id": 7}
         assert len(s.calls) == 2
 
@@ -153,15 +171,20 @@ class TestCallApi:
             call_api(s, _CFG, "sendPhoto", {}, _sleep=lambda x: None)
 
     def test_network_error_retried_then_raises(self):
-        s = _Session([lambda: ConnectionError("boom"),
-                      lambda: ConnectionError("boom"),
-                      lambda: ConnectionError("boom")])
+        s = _Session(
+            [
+                lambda: ConnectionError("boom"),
+                lambda: ConnectionError("boom"),
+                lambda: ConnectionError("boom"),
+            ]
+        )
         with pytest.raises(TgError):
             call_api(s, _CFG, "sendPhoto", {}, _sleep=lambda x: None)
         assert len(s.calls) == 3
 
 
 # ---------------- upload 编排 ----------------
+
 
 class TestUpload:
     def test_directory_flow(self, tmp_path):

@@ -25,12 +25,14 @@ class TestABogus:
     def test_seed_and_clock_make_output_deterministic(self):
         a = ABogus("ua-x", rng=random.Random(7))
         b = ABogus("ua-x", rng=random.Random(7))
-        assert a.get_value("k=1", now_ms=_FIXED_MS) == \
-            b.get_value("k=1", now_ms=_FIXED_MS)
+        assert a.get_value("k=1", now_ms=_FIXED_MS) == b.get_value(
+            "k=1", now_ms=_FIXED_MS
+        )
 
     def test_golden_value_regression(self):
         bogus = ABogus("test-ua", rng=random.Random(42)).get_value(
-            "aweme_id=1&aid=6383", now_ms=_FIXED_MS)
+            "aweme_id=1&aid=6383", now_ms=_FIXED_MS
+        )
         assert bogus == _GOLDEN
 
     def test_clock_before_epoch_rejected(self):

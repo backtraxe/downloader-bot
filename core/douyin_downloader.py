@@ -20,6 +20,7 @@ Apache-2.0，见 douyin_abogus/douyin_websign 头注）。
 Cookie 文件两种格式皆可：Netscape（与 yt-dlp 共用 cookies/douyin.txt）
 或浏览器复制的 `Cookie:` 请求头整段——经 utils.cookie_text_to_header 统一转换。
 """
+
 import glob
 import json
 import os
@@ -48,8 +49,10 @@ logger = setup_logging()
 # TLS 指纹与 UA 必须对齐同一 Chrome 大版本——fake_useragent 随机 UA
 # 池里有老版本/非 Chrome 串，与 impersonate 指纹混搭会概率性触发风控
 _IMPERSONATE = "chrome150"
-_UA150 = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-          "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
+_UA150 = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+)
 
 # 抖音图文笔记 URL：/note/<数字ID>
 _NOTE_URL_RE = re.compile(r"https?://(?:www\.)?douyin\.com/note/(?P<id>\d+)")
@@ -115,7 +118,8 @@ def parse_render_data(html):
         return None
 
     m = re.search(
-        r'<script[^>]+id=["\']RENDER_DATA["\'][^>]*>(.*?)</script>', html, re.DOTALL)
+        r'<script[^>]+id=["\']RENDER_DATA["\'][^>]*>(.*?)</script>', html, re.DOTALL
+    )
     if m:
         try:
             return json.loads(unquote(m.group(1)))
@@ -141,7 +145,9 @@ def parse_pace_f_detail(html):
     """
     if not html:
         return None
-    pattern = re.compile(r'self\.__pace_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)', re.DOTALL)
+    pattern = re.compile(
+        r'self\.__pace_f\.push\(\[1,"((?:[^"\\]|\\.)*)"\]\)', re.DOTALL
+    )
     for m in pattern.finditer(html):
         try:
             # 捕获组是 JS 字符串字面量的内容，包一层引号交给 JSON 解码恢复转义
@@ -186,8 +192,9 @@ def extract_aweme_detail(data):
     while stack:
         node = stack.pop()
         if isinstance(node, dict):
-            if (node.get("aweme_id") or node.get("awemeId")) \
-                    and ("images" in node or "video" in node):
+            if (node.get("aweme_id") or node.get("awemeId")) and (
+                "images" in node or "video" in node
+            ):
                 return node
             stack.extend(node.values())
         elif isinstance(node, list):
@@ -214,11 +221,16 @@ def extract_douyin_image_url(img):
     """
     img = img or {}
     ordered = []
-    for camel, snake in (("downloadUrlList", "download_url_list"),
-                         ("urlList", "url_list")):
+    for camel, snake in (
+        ("downloadUrlList", "download_url_list"),
+        ("urlList", "url_list"),
+    ):
         ordered.extend(img.get(camel) or img.get(snake) or [])
-    valid = [u for u in ordered
-             if isinstance(u, str) and u.startswith(("http://", "https://", "//"))]
+    valid = [
+        u
+        for u in ordered
+        if isinstance(u, str) and u.startswith(("http://", "https://", "//"))
+    ]
     if not valid:
         return None
 
@@ -242,8 +254,14 @@ def _first_play_url(video_subtree):
     """
     video_subtree = video_subtree or {}
     _PRIORITY_KEYS = (
-        "play_addr", "download_addr", "playAddr", "playAddrH265",
-        "play_addr_h265", "bitRate", "bitRateList", "playApi",
+        "play_addr",
+        "download_addr",
+        "playAddr",
+        "playAddrH265",
+        "play_addr_h265",
+        "bitRate",
+        "bitRateList",
+        "playApi",
     )
 
     def _urls_in(node):
@@ -288,7 +306,12 @@ def extract_douyin_author(detail):
     nickname / uniqueId / unique_id 依次兜底。"""
     detail = detail or {}
     author = detail.get("authorInfo") or detail.get("author") or {}
-    return author.get("nickname") or author.get("uniqueId") or author.get("unique_id") or ""
+    return (
+        author.get("nickname")
+        or author.get("uniqueId")
+        or author.get("unique_id")
+        or ""
+    )
 
 
 def resolve_douyin_basename(detail):
@@ -311,20 +334,34 @@ _DETAIL_API = "https://www.douyin.com/aweme/v1/web/aweme/detail/"
 # detail API 基础 query 参数——逐项与发出去的 _UA150（Chrome150/Windows）
 # 指纹对齐：UA 参与 a_bogus 摘要，query 里的指纹段会被服务端交叉核对
 _API_BASE_PARAMS = {
-    "device_platform": "webapp", "aid": "6383", "channel": "channel_pc_web",
-    "pc_client_type": "1", "version_code": "290100", "version_name": "29.1.0",
-    "cookie_enabled": "true", "screen_width": "1920", "screen_height": "1080",
-    "browser_language": "zh-CN", "browser_platform": "Win32",
-    "browser_name": "Chrome", "browser_version": "150.0.0.0",
-    "browser_online": "true", "engine_name": "Blink",
-    "engine_version": "150.0.0.0", "os_name": "Windows", "os_version": "10",
-    "cpu_core_num": "8", "device_memory": "8", "platform": "PC",
-    "downlink": "10", "effective_type": "4g", "round_trip_time": "0",
+    "device_platform": "webapp",
+    "aid": "6383",
+    "channel": "channel_pc_web",
+    "pc_client_type": "1",
+    "version_code": "290100",
+    "version_name": "29.1.0",
+    "cookie_enabled": "true",
+    "screen_width": "1920",
+    "screen_height": "1080",
+    "browser_language": "zh-CN",
+    "browser_platform": "Win32",
+    "browser_name": "Chrome",
+    "browser_version": "150.0.0.0",
+    "browser_online": "true",
+    "engine_name": "Blink",
+    "engine_version": "150.0.0.0",
+    "os_name": "Windows",
+    "os_version": "10",
+    "cpu_core_num": "8",
+    "device_memory": "8",
+    "platform": "PC",
+    "downlink": "10",
+    "effective_type": "4g",
+    "round_trip_time": "0",
     "update_version_code": "170400",
 }
 
-_MS_TOKEN_ALPHABET = \
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
+_MS_TOKEN_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-"
 
 # 水印播放地址标记——命中即剔除（2026-08 前老协议的带水印端形式）
 _PLAYWM_MARK = "playwm"
@@ -363,8 +400,9 @@ def build_signed_detail_url(aweme_id, cookies, user_agent=_UA150):
     cookies 为 {name: value} 映射。返回 (url, 附加请求头)；缺 UIFID 时
     退化为仅 a_bogus 签名、无附加头（未保护端点仍可用，不伪造 websign）。
     """
-    params = dict(_API_BASE_PARAMS, aweme_id=str(aweme_id),
-                  msToken=_gen_false_ms_token())
+    params = dict(
+        _API_BASE_PARAMS, aweme_id=str(aweme_id), msToken=_gen_false_ms_token()
+    )
     query = urlencode(params)
     bogus = ABogus(user_agent).get_value(query)
     query = f"{query}&a_bogus={quote(bogus, safe='')}"
@@ -374,8 +412,10 @@ def build_signed_detail_url(aweme_id, cookies, user_agent=_UA150):
     # websign 对整串重新按 JS URLSearchParams 语义序列化后 md5——
     # 先解码回原值，避免对 a_bogus 层的百分号编码二次转义（签发的字节与
     # 发送的字节必须一致，这是它能过校验的唯一原因）
-    pairs = [(unquote(k), unquote(v)) for k, _, v in
-             (p.partition("=") for p in query.split("&"))]
+    pairs = [
+        (unquote(k), unquote(v))
+        for k, _, v in (p.partition("=") for p in query.split("&"))
+    ]
     fp = (cookies or {}).get(douyin_websign.VERIFY_FP_COOKIE)
     if fp:
         pairs += [("verifyFp", fp), ("fp", fp)]
@@ -447,29 +487,36 @@ def fetch_aweme_detail(aweme_id, cookie, session, max_retries=3):
     last_err = None
     for attempt in range(1, max_retries + 1):
         try:
-            r = session.get(api_url, headers=headers, timeout=15,
-                            impersonate=_IMPERSONATE)
+            r = session.get(
+                api_url, headers=headers, timeout=15, impersonate=_IMPERSONATE
+            )
             text = r.text or ""
             if r.status_code == 403 and "ArgusSecurityPlugin" in text:
                 logger.error(
                     "detail API 被 Argus 风控拒绝（%s）。多为同 IP 高频请求被"
                     "限流：建议冷却 10–30 分钟或换网络后重试。",
-                    text[:60].strip())
+                    text[:60].strip(),
+                )
                 return None
             r.raise_for_status()
             try:
                 data = json.loads(text)
             except ValueError:
                 raise _NonJsonResponse(
-                    f"{r.status_code} 非 JSON 响应（{len(text)} 字节）: "
-                    f"{text[:80]!r}") from None
+                    f"{r.status_code} 非 JSON 响应（{len(text)} 字节）: {text[:80]!r}"
+                ) from None
         except Exception as e:
             last_err = e
             retryable = _is_transient_error(e) or isinstance(e, _NonJsonResponse)
             if attempt < max_retries and retryable:
                 wait = attempt * 3 + random.uniform(0, 1)
-                logger.warning("detail API 请求重试 %d/%d 将在 %.1fs 后重试: %s",
-                               attempt, max_retries, wait, e)
+                logger.warning(
+                    "detail API 请求重试 %d/%d 将在 %.1fs 后重试: %s",
+                    attempt,
+                    max_retries,
+                    wait,
+                    e,
+                )
                 time.sleep(wait)
                 continue
             logger.error("detail API 请求失败: %s", last_err)
@@ -479,14 +526,18 @@ def fetch_aweme_detail(aweme_id, cookie, session, max_retries=3):
                     "实测门禁 = UIFID（签名用）+ 有效 ttwid 或 sessionid "
                     "至少其一，ttwid 过期正是这种形态。请刷新 Cookie："
                     "手机端 termux-clipboard-get | python "
-                    "cookie_import.py douyin")
+                    "cookie_import.py douyin"
+                )
             return None
         status = data.get("status_code")
         detail = data.get("aweme_detail")
         if status == 0 and detail:
             return detail
-        logger.error("detail API 返回异常：status_code=%s status_msg=%s",
-                     status, data.get("status_msg"))
+        logger.error(
+            "detail API 返回异常：status_code=%s status_msg=%s",
+            status,
+            data.get("status_msg"),
+        )
         return None
     return None
 
@@ -504,16 +555,23 @@ def _fetch_page(session, url, headers, max_retries=5):
     for attempt in range(1, max_retries + 1):
         try:
             response = session.get(
-                url, headers=headers, timeout=15, impersonate=_IMPERSONATE)
+                url, headers=headers, timeout=15, impersonate=_IMPERSONATE
+            )
             response.raise_for_status()
             # 验证码中间页重试：换新 Session（见函数 docstring）、拉长间隔，
             # 只重试 2 次；仍命中交回调用方提示冷却
-            if detect_jsvm_challenge(response.text) \
-                    and any(m in response.text for m in _CAPTCHA_PAGE_MARKERS) \
-                    and attempt < min(max_retries, 3):
+            if (
+                detect_jsvm_challenge(response.text)
+                and any(m in response.text for m in _CAPTCHA_PAGE_MARKERS)
+                and attempt < min(max_retries, 3)
+            ):
                 wait = 5 + random.uniform(0, 3)
-                logger.warning("触发验证码中间页（第 %d/%d 次），%.1fs 后新会话重试",
-                               attempt, min(max_retries, 3), wait)
+                logger.warning(
+                    "触发验证码中间页（第 %d/%d 次），%.1fs 后新会话重试",
+                    attempt,
+                    min(max_retries, 3),
+                    wait,
+                )
                 try:
                     session.close()
                 except Exception:
@@ -526,8 +584,13 @@ def _fetch_page(session, url, headers, max_retries=5):
             last_err = e
             if attempt < max_retries and _is_transient_error(e):
                 wait = attempt * 3 + random.uniform(0, 1)
-                logger.warning("请求重试 %d/%d 将在 %.1fs 后重试: %s",
-                               attempt, max_retries, wait, e)
+                logger.warning(
+                    "请求重试 %d/%d 将在 %.1fs 后重试: %s",
+                    attempt,
+                    max_retries,
+                    wait,
+                    e,
+                )
                 time.sleep(wait)
                 continue
             break
@@ -549,10 +612,13 @@ def download_file(session, url, filepath, headers, max_retries=5):
             # 与 1024 同一量级：0.5–1.5s 随机间隔，避免触发限流
             time.sleep(random.uniform(0.5, 1.5))
             r = session.get(
-                url, headers=headers, timeout=15, impersonate=_IMPERSONATE, stream=True)
+                url, headers=headers, timeout=15, impersonate=_IMPERSONATE, stream=True
+            )
             r.raise_for_status()
 
-            content_type = r.headers.get("Content-Type", "") or r.headers.get("content-type", "")
+            content_type = r.headers.get("Content-Type", "") or r.headers.get(
+                "content-type", ""
+            )
             if is_html_content(content_type):
                 raise Exception(f"被拦截：响应为 HTML（{content_type}）")
             ext = guess_extension(url, content_type, default="")
@@ -578,7 +644,11 @@ def download_file(session, url, filepath, headers, max_retries=5):
                 wait = attempt * 3 + random.uniform(0, 1)
                 logger.warning(
                     "  [重试 %d/%d] %s 将在 %.1fs 后重试: %s",
-                    attempt, max_retries, os.path.basename(filepath), wait, e,
+                    attempt,
+                    max_retries,
+                    os.path.basename(filepath),
+                    wait,
+                    e,
                 )
                 time.sleep(wait)
                 continue
@@ -634,17 +704,23 @@ def download_douyin_note(url, cookie):
             "未在页面数据中定位到笔记详情（RENDER_DATA/pace_f 均无 aweme detail）。"
             "可能是页面结构已更新或 Cookie 失效"
             "（状态 %s，正文 %d 字节，落地 %s，耗时 %.1f 秒）",
-            getattr(response, "status_code", "?"), len(html),
-            getattr(response, "url", "?"), time.time() - start_time,
+            getattr(response, "status_code", "?"),
+            len(html),
+            getattr(response, "url", "?"),
+            time.time() - start_time,
         )
         return
 
     # 笔记 ID 优先取自 URL（可溯源），缺失时用 detail 的 awemeId/aweme_id
     m = _NOTE_URL_RE.search(url)
-    aweme_id = (m.group("id") if m else None) \
-        or str(detail.get("aweme_id") or detail.get("awemeId") or "")
-    safe_title = f"{resolve_douyin_basename(detail)}_{aweme_id}" if aweme_id \
+    aweme_id = (m.group("id") if m else None) or str(
+        detail.get("aweme_id") or detail.get("awemeId") or ""
+    )
+    safe_title = (
+        f"{resolve_douyin_basename(detail)}_{aweme_id}"
+        if aweme_id
         else resolve_douyin_basename(detail)
+    )
 
     author = extract_douyin_author(detail)
     base_path = build_download_dir("douyin", safe_title, author=author)
@@ -673,7 +749,9 @@ def download_douyin_note(url, cookie):
         video_url, reason = extract_note_video_url(video)
         if video_url:
             logger.info("发现视频，加入下载队列...")
-            download_tasks.append((ensure_https(video_url), os.path.join(base_path, "video.mp4")))
+            download_tasks.append(
+                (ensure_https(video_url), os.path.join(base_path, "video.mp4"))
+            )
         else:
             logger.warning("发现 video 字段但未能提取到直链：%s", reason)
 
@@ -695,7 +773,10 @@ def download_douyin_note(url, cookie):
                     logger.info("%s", result)
             logger.info(
                 "下载完成：%d 成功 / %d 失败 / 共 %d 项，耗时 %.1f 秒",
-                succeeded, failed, len(download_tasks), time.time() - start_time,
+                succeeded,
+                failed,
+                len(download_tasks),
+                time.time() - start_time,
             )
     else:
         logger.info("未发现可下载的媒体文件，耗时 %.1f 秒。", time.time() - start_time)
@@ -734,7 +815,8 @@ def download_douyin_video(url, cookie):
     if not play_urls:
         logger.error(
             "详情中未找到可播放直链（视频可能已删除或不可见），耗时 %.1f 秒。",
-            time.time() - start_time)
+            time.time() - start_time,
+        )
         session.close()
         return
 
@@ -780,7 +862,9 @@ def main():
         if not raw_input:
             continue
         for target_url in extract_urls(raw_input):
-            if not is_douyin_note_url(target_url) and not is_douyin_video_url(target_url):
+            if not is_douyin_note_url(target_url) and not is_douyin_video_url(
+                target_url
+            ):
                 logger.warning("仅支持 douyin.com/note|video/<id> 链接：%s", target_url)
                 continue
             cookie = load_cookie_for_url(target_url)

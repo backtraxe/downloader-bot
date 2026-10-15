@@ -1,5 +1,11 @@
-# ruff 静态检查：只开 bug 类规则，不做风格重排（仓库风格见 AGENTS.md）
+# ruff 静态检查 + 格式化配置。vendored 签名三件套整体排除：
+# 移植自 Evil0ctal/Douyin_TikTok_Download_API，保持原样以便与上游 diff 重新同步
 target-version = "py313"
+extend-exclude = [
+    "core/douyin_abogus.py",
+    "core/douyin_sm3.py",
+    "core/douyin_websign.py",
+]
 
 [lint]
-select = ["F", "E9", "W", "B"]
+select = ["F", "E9", "W", "B"]  # 只开 bug 类规则，不做风格类（风格由 ruff format 管）

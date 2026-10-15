@@ -3,6 +3,7 @@
 原子去重、扩展名推断、日志配置、cookie 格式转换等。
 
 集中在此以避免各模块各写一份且实现不一致。"""
+
 import io
 import logging
 import os
@@ -20,7 +21,9 @@ except ImportError:
 _ILLEGAL_FILENAME_CHARS = re.compile(r'[\\/*?:"<>|\r\n]')
 
 # 常见媒体扩展名白名单，用于从 URL 推断类型
-_EXT_BY_URL = re.compile(r'\.(jpe?g|png|gif|webp|hei[cf]|mp4|mov|webm|avi|mkv)(?:\?|#|$)', re.IGNORECASE)
+_EXT_BY_URL = re.compile(
+    r"\.(jpe?g|png|gif|webp|hei[cf]|mp4|mov|webm|avi|mkv)(?:\?|#|$)", re.IGNORECASE
+)
 
 # Content-Type -> 扩展名映射
 _EXT_BY_CONTENT_TYPE = {
@@ -44,7 +47,7 @@ _EXT_BY_CONTENT_TYPE = {
 _HTML_CONTENT_TYPES = ("text/html", "application/xhtml+xml")
 
 # 匹配 http(s):// 开头的完整 URL（到首个空白字符为止）
-_URL_PATTERN = re.compile(r'https?://[^\s]+')
+_URL_PATTERN = re.compile(r"https?://[^\s]+")
 
 # URL 尾部需要剔除的字符：中日韩文字、中文标点、英文标点、括号引号等
 # 这些字符不会出现在合法 URL 末尾，通常来自分享文案的上下文
@@ -66,7 +69,9 @@ def setup_logging(level: int = logging.INFO) -> logging.Logger:
         root.removeHandler(h)
     handler = logging.StreamHandler()
     handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%H:%M:%S")
+        logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%H:%M:%S"
+        )
     )
     root.addHandler(handler)
     root.setLevel(level)
@@ -91,7 +96,9 @@ def init_useragent(logger: logging.Logger):
         # 用多次采样避免极小概率恰好抽到 fallback 造成误判。
         samples = [ua.random for _ in range(5)]
         if not any(s and s != ua.fallback for s in samples):
-            logger.warning("fake_useragent 随机 UA 不可用（数据加载失败），降级为固定 UA")
+            logger.warning(
+                "fake_useragent 随机 UA 不可用（数据加载失败），降级为固定 UA"
+            )
             return None, _DEFAULT_UA
         return ua, _DEFAULT_UA
     except Exception as e:  # noqa: BLE001 初始化失败需兜底
@@ -226,7 +233,7 @@ def unique_path(path: str) -> str:
 def normalize_xhs_state_json(raw: str) -> str:
     """把小红书 __INITIAL_STATE__ 里 JSON 值语境的 undefined 替换为 null。
     只替换 `:` 或 `[` 之后、作为独立 token 的 undefined，避免误伤正文/URL 中的 "undefined" 字样。"""
-    return re.sub(r'(?<=[\[:\s,])\s*undefined\b', " null", raw)
+    return re.sub(r"(?<=[\[:\s,])\s*undefined\b", " null", raw)
 
 
 def build_download_dir(site_name, title, author=None, download_dir="download"):
@@ -272,15 +279,17 @@ def cookie_header_to_netscape(header, domain, out_path=None):
             continue
         # 字段：domain  include_subdomain  path  secure  expiration  name  value
         lines.append(
-            "\t".join([
-                domain,
-                "TRUE",
-                "/",
-                "TRUE",
-                str(_NETSCAPE_EXPIRE),
-                name,
-                value,
-            ])
+            "\t".join(
+                [
+                    domain,
+                    "TRUE",
+                    "/",
+                    "TRUE",
+                    str(_NETSCAPE_EXPIRE),
+                    name,
+                    value,
+                ]
+            )
         )
     content = "\n".join(lines) + "\n"
     if out_path:
@@ -339,10 +348,19 @@ def cookie_list_to_netscape(cookies, out_path=None):
         if expires <= 0:
             expires = _NETSCAPE_EXPIRE
         include_subdomain = "TRUE" if domain.startswith(".") else "FALSE"
-        lines.append("\t".join([
-            domain, include_subdomain, path, secure, str(expires),
-            name, str(c.get("value") or ""),
-        ]))
+        lines.append(
+            "\t".join(
+                [
+                    domain,
+                    include_subdomain,
+                    path,
+                    secure,
+                    str(expires),
+                    name,
+                    str(c.get("value") or ""),
+                ]
+            )
+        )
     content = "\n".join(lines) + "\n"
     if out_path:
         with open(out_path, "w", encoding="utf-8") as f:

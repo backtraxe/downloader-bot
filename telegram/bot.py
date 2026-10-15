@@ -21,6 +21,7 @@
 运行（建议 tmux 常驻）：
     python tg_bot.py
 """
+
 import logging
 import os
 import re
@@ -39,6 +40,7 @@ DOWNLOAD_ROOT = "download"
 
 
 # ---------------- 标签与元数据（纯函数） ----------------
+
 
 def make_tag(text):
     """把任意文本压成单个合法 hashtag 词（#作者）：空白/标点归并为下划线。
@@ -112,9 +114,11 @@ def parse_post_meta(group_key, rel_files):
 
 # ---------------- 消息处理 ----------------
 
+
 def _reply(session, token, chat_id, text):
-    call_api(session, {"bot_token": token}, "sendMessage",
-             {"chat_id": chat_id, "text": text})
+    call_api(
+        session, {"bot_token": token}, "sendMessage", {"chat_id": chat_id, "text": text}
+    )
 
 
 def is_allowed(cfg, user_id):
@@ -123,8 +127,9 @@ def is_allowed(cfg, user_id):
     return user_id in allowed
 
 
-def handle_message(session, cfg, message, dispatch=dispatch_url,
-                   download_root=DOWNLOAD_ROOT):
+def handle_message(
+    session, cfg, message, dispatch=dispatch_url, download_root=DOWNLOAD_ROOT
+):
     """处理一条消息；返回回复文本列表（真实发送经 _reply，测试中读返回）。"""
     token = cfg["bot_token"]
     chat = message.get("chat") or {}
@@ -140,9 +145,11 @@ def handle_message(session, cfg, message, dispatch=dispatch_url,
     if not text:
         return replies
     if text.startswith("/start") or text.startswith("/help"):
-        say("发链接即可：小红书 / 抖音图文或视频 / bilibili / youtube / "
+        say(
+            "发链接即可：小红书 / 抖音图文或视频 / bilibili / youtube / "
             "instagram / x / 任意网页。产物会以相册或视频回传，"
-            "caption 带 #作者 标签方便搜索。")
+            "caption 带 #作者 标签方便搜索。"
+        )
         return replies
     if not is_allowed(cfg, user_id):
         say(f"未授权用户。把你的用户 id 发给维护者加入白名单：{user_id}")
@@ -170,12 +177,16 @@ def handle_message(session, cfg, message, dispatch=dispatch_url,
         sent_total, skipped_total = 0, 0
         for group_key, rel_files in groups.items():
             site, author, title = parse_post_meta(group_key, rel_files)
-            target = (os.path.join(download_root, group_key) if group_key
-                      else os.path.join(download_root, rel_files[0]))
+            target = (
+                os.path.join(download_root, group_key)
+                if group_key
+                else os.path.join(download_root, rel_files[0])
+            )
             caption = build_caption(site, author, title)
             try:
-                sent, skipped = upload(session, cfg, target,
-                                       caption=caption, chat_id=chat_id)
+                sent, skipped = upload(
+                    session, cfg, target, caption=caption, chat_id=chat_id
+                )
             except TgError as e:
                 say(f"上传 Telegram 失败：{e}")
                 continue
@@ -183,17 +194,20 @@ def handle_message(session, cfg, message, dispatch=dispatch_url,
             skipped_total += len(skipped)
             for path in skipped:
                 say(f"超 50MB 已跳过（文件在 {path}）")
-        say(f"完成：{sent_total} 项已回传。" if not skipped_total
-            else f"完成：{sent_total} 项已回传，{skipped_total} 项超限跳过。")
+        say(
+            f"完成：{sent_total} 项已回传。"
+            if not skipped_total
+            else f"完成：{sent_total} 项已回传，{skipped_total} 项超限跳过。"
+        )
     return replies
 
 
 # ---------------- 长轮询 ----------------
 
+
 def get_updates(session, token, offset, timeout=25, long_timeout=40):
     """long poll getUpdates；网络异常向上抛，由主循环退避。"""
-    url = (f"{_API_BASE}/bot{token}/getUpdates"
-           f"?offset={offset}&timeout={timeout}")
+    url = f"{_API_BASE}/bot{token}/getUpdates?offset={offset}&timeout={timeout}"
     r = session.get(url, timeout=long_timeout)
     payload = r.json()
     if not payload.get("ok"):
@@ -213,16 +227,20 @@ def main():
     setup_logging()
     cfg = load_config()
     if cfg is None:
-        print("请先在 config.json 的 telegram 段填入 bot_token / chat_id /"
-              " allowed_users（@BotFather 拿 token；用户 id 会在首次私聊被拒时回显）",
-              file=sys.stderr)
+        print(
+            "请先在 config.json 的 telegram 段填入 bot_token / chat_id /"
+            " allowed_users（@BotFather 拿 token；用户 id 会在首次私聊被拒时回显）",
+            file=sys.stderr,
+        )
         return 1
 
     session = http_client.Session()
     try:
         offset = initial_offset(session, cfg["bot_token"])
-        logger.info("tg_bot 已启动（白名单 %s），等待消息……",
-                    cfg.get("allowed_users") or "空：全部拒绝")
+        logger.info(
+            "tg_bot 已启动（白名单 %s），等待消息……",
+            cfg.get("allowed_users") or "空：全部拒绝",
+        )
         while True:
             try:
                 updates = get_updates(session, cfg["bot_token"], offset)
@@ -237,8 +255,7 @@ def main():
                     try:
                         handle_message(session, cfg, message)
                     except Exception:
-                        logger.exception("处理消息失败: %s",
-                                         str(message)[:200])
+                        logger.exception("处理消息失败: %s", str(message)[:200])
     except KeyboardInterrupt:
         logger.info("已停止")
     finally:

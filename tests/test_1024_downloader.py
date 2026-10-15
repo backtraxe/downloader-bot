@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """1024_downloader.py 纯函数/可注入会话单元测试（无网络依赖）"""
+
 import importlib
 import os
 
@@ -9,6 +10,7 @@ mod = importlib.import_module("core.1024_downloader")
 
 
 # ---------------- _is_block_status ----------------
+
 
 class TestIsBlockStatus:
     @pytest.mark.parametrize("code", [555, 556, 557, 567, 429, 500, 502, 503])
@@ -23,26 +25,42 @@ class TestIsBlockStatus:
 
 # ---------------- _is_decorative_name ----------------
 
+
 class TestIsDecorativeName:
-    @pytest.mark.parametrize("name", [
-        "header-logo.png", "69_avatar_middle.jpg", "weixin_qrcode.png",
-        "coolapk_emotion_1017_houhouhou.png", "beian.png", "app_icon.png",
-        "LOGO.PNG",  # 大小写不敏感
-    ])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "header-logo.png",
+            "69_avatar_middle.jpg",
+            "weixin_qrcode.png",
+            "coolapk_emotion_1017_houhouhou.png",
+            "beian.png",
+            "app_icon.png",
+            "LOGO.PNG",  # 大小写不敏感
+        ],
+    )
     def test_decorative(self, name):
         assert mod._is_decorative_name(name) is True
 
-    @pytest.mark.parametrize("name", [
-        "38813669_98682f5d_6765_3739_311@2494x3325.jpg.m.jpg",
-        "photo.jpg", "IMG_2024.png", "video.mp4",
-        # 装饰关键词作为更长单词的子串不得误杀（icon→iconic、avatar→avatare）
-        "iconic_photo.jpg", "icondesign_2024.jpg", "avatare.jpg",
-    ])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "38813669_98682f5d_6765_3739_311@2494x3325.jpg.m.jpg",
+            "photo.jpg",
+            "IMG_2024.png",
+            "video.mp4",
+            # 装饰关键词作为更长单词的子串不得误杀（icon→iconic、avatar→avatare）
+            "iconic_photo.jpg",
+            "icondesign_2024.jpg",
+            "avatare.jpg",
+        ],
+    )
     def test_content(self, name):
         assert mod._is_decorative_name(name) is False
 
 
 # ---------------- download_file 装饰小图过滤 ----------------
+
 
 class _FakeImageResp:
     def __init__(self, body, content_type="image/jpeg"):
@@ -62,21 +80,27 @@ class TestDownloadFileDecorFilter:
         class S:
             def get(self, url, **kw):
                 return _FakeImageResp(body, content_type)
+
         return S()
 
     def test_small_image_skipped(self, tmp_path, monkeypatch):
         monkeypatch.setattr(mod.time, "sleep", lambda s: None)
         target = str(tmp_path / "tiny.png")
-        result = mod.download_file(self._fake_session(b"x" * 100),
-                                   "http://img/tiny.png", target, "http://page")
+        result = mod.download_file(
+            self._fake_session(b"x" * 100), "http://img/tiny.png", target, "http://page"
+        )
         assert "[跳过]" in result
         assert not os.path.exists(target)
 
     def test_large_image_kept(self, tmp_path, monkeypatch):
         monkeypatch.setattr(mod.time, "sleep", lambda s: None)
         target = str(tmp_path / "big.jpg")
-        result = mod.download_file(self._fake_session(b"x" * 30000),
-                                   "http://img/big.jpg", target, "http://page")
+        result = mod.download_file(
+            self._fake_session(b"x" * 30000),
+            "http://img/big.jpg",
+            target,
+            "http://page",
+        )
         assert "[成功]" in result
         assert os.path.exists(target)
 
@@ -84,8 +108,12 @@ class TestDownloadFileDecorFilter:
         # 视频不做体积过滤——短视频也可能很小
         monkeypatch.setattr(mod.time, "sleep", lambda s: None)
         target = str(tmp_path / "clip.mp4")
-        result = mod.download_file(self._fake_session(b"x" * 100, "video/mp4"),
-                                   "http://img/clip.mp4", target, "http://page")
+        result = mod.download_file(
+            self._fake_session(b"x" * 100, "video/mp4"),
+            "http://img/clip.mp4",
+            target,
+            "http://page",
+        )
         assert "[成功]" in result
         assert os.path.exists(target)
 
@@ -93,10 +121,15 @@ class TestDownloadFileDecorFilter:
         # 尺寸可解析时按尺寸过滤：100x100 头像即使文件大于 20KB 也是装饰图
         monkeypatch.setattr(mod.time, "sleep", lambda s: None)
         from tests.test_utils import _make_png
+
         png = _make_png(100, 100) + b"x" * 30000  # 填充使其超过 20KB
         target = str(tmp_path / "small-dims.png")  # 中性文件名，确保走尺寸判定
-        result = mod.download_file(self._fake_session(png, "image/png"),
-                                   "http://img/photo.png", target, "http://page")
+        result = mod.download_file(
+            self._fake_session(png, "image/png"),
+            "http://img/photo.png",
+            target,
+            "http://page",
+        )
         assert "[跳过]" in result
         assert not os.path.exists(target)
 
@@ -109,9 +142,11 @@ class TestDownloadFileDecorFilter:
 
         class S:
             calls = 0
+
             def get(self, url, **kw):
                 self.calls += 1
                 raise AssertionError("不应发起网络请求")
+
         sess = S()
         result = mod.download_file(sess, "http://img/001.jpg", target, "http://page")
         assert sess.calls == 0
@@ -123,20 +158,28 @@ class TestDownloadFileDecorFilter:
         # 反向用例：1080x1440 照片即使是高压缩小文件（<20KB）也不该删
         monkeypatch.setattr(mod.time, "sleep", lambda s: None)
         from tests.test_utils import _make_png
+
         png = _make_png(1080, 1440)  # 只有几十字节
         target = str(tmp_path / "photo.png")
-        result = mod.download_file(self._fake_session(png, "image/png"),
-                                   "http://img/photo.png", target, "http://page")
+        result = mod.download_file(
+            self._fake_session(png, "image/png"),
+            "http://img/photo.png",
+            target,
+            "http://page",
+        )
         assert "[成功]" in result
         assert os.path.exists(target)
 
 
 # ---------------- make_page_dir_name ----------------
 
+
 class TestMakePageDirName:
     def test_with_numeric_id(self):
         # 目录 = 标题_ID，撞名时可区分、可溯源
-        out = mod.make_page_dir_name("发点存货", "https://www.coolapk.com/feed/74208176?s=x")
+        out = mod.make_page_dir_name(
+            "发点存货", "https://www.coolapk.com/feed/74208176?s=x"
+        )
         assert out == "发点存货_74208176"
 
     def test_without_numeric_id(self):
@@ -157,9 +200,11 @@ class TestMakePageDirName:
 
 # ---------------- collect_media_urls ----------------
 
+
 class TestCollectMediaUrls:
     def _soup(self, html):
         from bs4 import BeautifulSoup
+
         return BeautifulSoup(html, "html.parser")
 
     def test_order_preserved_and_dedup(self):
@@ -217,13 +262,16 @@ class TestCollectMediaUrls:
 
 # ---------------- build_media_tasks ----------------
 
+
 class TestBuildMediaTasks:
     def test_sequential_names(self):
         # 目录名已带标题与 ID，文件只要 001.xxx 序号即可
         items = [("https://a.com/1.jpg", ".jpg"), ("https://a.com/v.mp4", ".mp4")]
         tasks = mod.build_media_tasks(items, "dl/site/标题_123")
         assert [os.path.basename(p) for _, p in tasks] == ["001.jpg", "002.mp4"]
-        assert all(p.startswith(os.path.join("dl", "site", "标题_123")) for _, p in tasks)
+        assert all(
+            p.startswith(os.path.join("dl", "site", "标题_123")) for _, p in tasks
+        )
 
     def test_urls_kept_aligned(self):
         items = [("https://a.com/a.png", ".png")]
@@ -243,13 +291,16 @@ _COOLAPK_HTML = """
 class TestExtractPageAuthor:
     def _soup(self, html):
         from bs4 import BeautifulSoup
+
         return BeautifulSoup(html, "html.parser")
 
     def test_coolapk_dom(self):
         soup = self._soup(_COOLAPK_HTML)
         author, title = mod.extract_page_author(
-            soup, "发点存货[哦吼吼] 来自 葵花点菜手 - 酷安",
-            "https://www.coolapk.com/feed/74208176")
+            soup,
+            "发点存货[哦吼吼] 来自 葵花点菜手 - 酷安",
+            "https://www.coolapk.com/feed/74208176",
+        )
         assert author == "葵花点菜手"
         # 标题里的 "来自 X - 站点" 尾巴应剥掉，避免作者信息在目录名里重复
         assert title == "发点存货[哦吼吼]"
@@ -258,15 +309,16 @@ class TestExtractPageAuthor:
         # DOM 选择器失效（页面改版）时，用标题"来自 X - Y"模式兜底
         soup = self._soup("<html><body><p>no author node</p></body></html>")
         author, title = mod.extract_page_author(
-            soup, "某帖子 来自 某用户 - 酷安",
-            "https://www.coolapk.com/feed/1")
+            soup, "某帖子 来自 某用户 - 酷安", "https://www.coolapk.com/feed/1"
+        )
         assert author == "某用户"
         assert title == "某帖子"
 
     def test_no_author_returns_empty_and_keeps_title(self):
         soup = self._soup("<html><body></body></html>")
         author, title = mod.extract_page_author(
-            soup, "普通页面标题", "https://example.com/page")
+            soup, "普通页面标题", "https://example.com/page"
+        )
         assert author == ""
         assert title == "普通页面标题"
 
@@ -274,8 +326,8 @@ class TestExtractPageAuthor:
         # 正文本身含"来自"且尾巴站点与当前域名无关——不得误剥
         soup = self._soup("<html><body></body></html>")
         author, title = mod.extract_page_author(
-            soup, "我 来自 上海 - 记录生活",
-            "https://example.com/page")
+            soup, "我 来自 上海 - 记录生活", "https://example.com/page"
+        )
         assert author == ""
         assert title == "我 来自 上海 - 记录生活"
 
@@ -283,13 +335,14 @@ class TestExtractPageAuthor:
         # DOM 提取到作者，但标题尾巴站点不匹配时，标题保持原样
         soup = self._soup(_COOLAPK_HTML)
         author, title = mod.extract_page_author(
-            soup, "来自 远方的朋友 - 随笔",
-            "https://www.coolapk.com/feed/1")
+            soup, "来自 远方的朋友 - 随笔", "https://www.coolapk.com/feed/1"
+        )
         assert author == "葵花点菜手"
         assert title == "来自 远方的朋友 - 随笔"
 
 
 # ---------------- fetch_page ----------------
+
 
 class _FakeResp:
     def __init__(self, status_code, url="http://x"):

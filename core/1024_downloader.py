@@ -33,7 +33,14 @@ ua, _FALLBACK_UA = init_useragent(logger)
 # 装饰性资源过滤：logo/头像/二维码/表情包/备案图标等站点装饰图
 # 按文件名关键词（下载前）与体积阈值（下载后）双重过滤
 _DECORATIVE_KEYWORDS = (
-    "logo", "avatar", "qrcode", "qr_code", "emotion", "emoji", "beian", "icon",
+    "logo",
+    "avatar",
+    "qrcode",
+    "qr_code",
+    "emotion",
+    "emoji",
+    "beian",
+    "icon",
 )
 # 尺寸可解析时按尺寸过滤：短边小于该值判为装饰图（头像/logo 通常 ≤200px，
 # 正文照片通常 ≥1000px）；解析失败回退体积阈值（正文照片通常远大于 20KB）
@@ -48,8 +55,10 @@ def _is_decorative_name(filename):
     "avatare" 被误里 "avatar"——这类单词只是以装饰关键词开头/结尾，
     语义上不是装饰词。"""
     low = filename.lower()
-    return any(re.search(rf"(?:^|[\W_]){re.escape(kw)}(?:[\W_]|$)", low)
-               for kw in _DECORATIVE_KEYWORDS)
+    return any(
+        re.search(rf"(?:^|[\W_]){re.escape(kw)}(?:[\W_]|$)", low)
+        for kw in _DECORATIVE_KEYWORDS
+    )
 
 
 def get_headers():
@@ -81,12 +90,19 @@ def fetch_page(session, url, headers, max_attempts=3):
     """
     for attempt in range(1, max_attempts + 1):
         try:
-            resp = session.get(url, headers=headers, timeout=15, impersonate="chrome110")
+            resp = session.get(
+                url, headers=headers, timeout=15, impersonate="chrome110"
+            )
         except Exception as e:
             if attempt < max_attempts:
                 wait = attempt * 2 + random.uniform(0, 1)
-                logger.warning("请求异常（第 %d/%d 次），%.1fs 后重试: %s",
-                               attempt, max_attempts, wait, e)
+                logger.warning(
+                    "请求异常（第 %d/%d 次），%.1fs 后重试: %s",
+                    attempt,
+                    max_attempts,
+                    wait,
+                    e,
+                )
                 time.sleep(wait)
                 continue
             logger.error("请求失败: %s", e)
@@ -94,11 +110,18 @@ def fetch_page(session, url, headers, max_attempts=3):
         if _is_block_status(resp.status_code):
             if attempt < max_attempts:
                 wait = attempt * 2 + random.uniform(0, 1)
-                logger.warning("疑似被站点防护拦截 (HTTP %d，第 %d/%d 次)，%.1fs 后重试...",
-                               resp.status_code, attempt, max_attempts, wait)
+                logger.warning(
+                    "疑似被站点防护拦截 (HTTP %d，第 %d/%d 次)，%.1fs 后重试...",
+                    resp.status_code,
+                    attempt,
+                    max_attempts,
+                    wait,
+                )
                 time.sleep(wait)
                 continue
-            logger.error("请求被站点安全防护拦截 (HTTP %d)，重试后仍失败", resp.status_code)
+            logger.error(
+                "请求被站点安全防护拦截 (HTTP %d)，重试后仍失败", resp.status_code
+            )
             return None
         try:
             resp.raise_for_status()
@@ -136,7 +159,9 @@ def download_file(session, url, filepath, page_url):
         time.sleep(random.uniform(0.5, 1.5))
 
         # 始终传 impersonate；http_client 在 curl_cffi 不可用时用系统 curl 模拟
-        r = session.get(url, headers=img_headers, stream=True, timeout=30, impersonate="chrome110")
+        r = session.get(
+            url, headers=img_headers, stream=True, timeout=30, impersonate="chrome110"
+        )
         r.raise_for_status()
 
         # 验证一下下载下来的到底是不是真实图片
@@ -167,8 +192,10 @@ def download_file(session, url, filepath, page_url):
             if dims is not None:
                 if min(dims) < MIN_IMAGE_DIMENSION:
                     os.remove(safe_path)
-                    return (f"  [跳过] {os.path.basename(safe_path)} "
-                            f"尺寸 {dims[0]}x{dims[1]} 过小，判定为装饰图")
+                    return (
+                        f"  [跳过] {os.path.basename(safe_path)} "
+                        f"尺寸 {dims[0]}x{dims[1]} 过小，判定为装饰图"
+                    )
             elif os.path.getsize(safe_path) < MIN_IMAGE_BYTES:
                 os.remove(safe_path)
                 return f"  [跳过] {os.path.basename(safe_path)} 体积过小，判定为装饰图"
@@ -179,7 +206,9 @@ def download_file(session, url, filepath, page_url):
 
 
 # 标题中"正文 来自 作者 - 站点"的站点后缀模式（酷安等），用于兜底提取作者
-_TITLE_AUTHOR_TAIL = re.compile(r"^(?P<title>.*?)\s+来自\s+(?P<author>[^-<>]{1,30})\s+-\s+(?P<site>\S+)\s*$")
+_TITLE_AUTHOR_TAIL = re.compile(
+    r"^(?P<title>.*?)\s+来自\s+(?P<author>[^-<>]{1,30})\s+-\s+(?P<site>\S+)\s*$"
+)
 
 
 def _match_title_tail(page_title, url):
@@ -240,9 +269,19 @@ def make_page_dir_name(page_title, url):
 
 # 常见存放真实链接的“马甲”属性列表
 _LAZY_ATTRS = [
-    "src", "data-src", "data-original", "data-lazy-src", "data-v-lazy",
-    "data-url", "lazy-src", "file", "source", "data-src-retina", "data-hd-src",
-    "ess-data", "data-link",  # 新增目标网站的专属属性
+    "src",
+    "data-src",
+    "data-original",
+    "data-lazy-src",
+    "data-v-lazy",
+    "data-url",
+    "lazy-src",
+    "file",
+    "source",
+    "data-src-retina",
+    "data-hd-src",
+    "ess-data",
+    "data-link",  # 新增目标网站的专属属性
 ]
 
 
@@ -283,7 +322,10 @@ def collect_media_urls(soup, page_url):
     # 2. 扫描包裹媒体的 A 标签 (href 直链)
     for a_tag in soup.find_all("a"):
         href = a_tag.get("href", "")
-        if href and any(href.lower().endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"]):
+        if href and any(
+            href.lower().endswith(ext)
+            for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"]
+        ):
             full_url = normalize_url(href, page_url)
             if full_url.startswith("http"):
                 _add(full_url, guess_extension(full_url, default=".jpg"))
@@ -347,7 +389,9 @@ def extract_general_media(url):
     media_items = collect_media_urls(soup, url)
 
     if not media_items:
-        logger.error("深度扫描后依然没有发现媒体文件。（耗时 %.1f 秒）", time.time() - start_time)
+        logger.error(
+            "深度扫描后依然没有发现媒体文件。（耗时 %.1f 秒）", time.time() - start_time
+        )
         return
 
     logger.info("深度扫描完成！共发现 %d 个媒体文件，开始下载...", len(media_items))

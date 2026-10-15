@@ -8,6 +8,7 @@ Termux 上 curl_cffi 的编译扩展常因 Python 版本不匹配而加载失败
 （如 _wrapper.abi3.so 链接 libpython3.13.so 但运行时是 3.14）。
 系统 curl 命令由 libcurl 处理 TLS，不依赖 Python ABI，在 Termux 上天然可用。
 """
+
 import logging
 import os
 import re
@@ -20,6 +21,7 @@ logger = logging.getLogger("downloader")
 # curl_cffi 是否可用——全局探测一次
 try:
     from curl_cffi import requests as _cffi_requests
+
     _HAS_CURL_CFFI = True
 except Exception as _cffi_err:  # noqa: BLE001
     _cffi_requests = None
@@ -56,10 +58,11 @@ class CurlResponse:
 
     def iter_content(self, chunk_size=8192):
         for i in range(0, len(self._body), chunk_size):
-            yield self._body[i:i + chunk_size]
+            yield self._body[i : i + chunk_size]
 
     def json(self):
         import json
+
         return json.loads(self._body)
 
 
@@ -82,7 +85,7 @@ def _parse_response_blocks(raw, base_url=""):
         if idx == -1:
             return 200, {}, raw, effective_url
 
-        header_bytes, rest = raw[:idx], raw[idx + len(sep):]
+        header_bytes, rest = raw[:idx], raw[idx + len(sep) :]
         header_text = header_bytes.decode("utf-8", errors="replace")
         lines = header_text.splitlines()
 
@@ -112,13 +115,18 @@ def _parse_response_blocks(raw, base_url=""):
         return status_code, resp_headers, rest, effective_url
 
 
-def _build_curl_args(url, method, headers, timeout, impersonate, stream, extra_flags=None):
+def _build_curl_args(
+    url, method, headers, timeout, impersonate, stream, extra_flags=None
+):
     """组装 curl 命令行参数列表。"""
     args = [_CURL_BIN, "-s", "-S", "--show-error", "-L", "-X", method]
     args += [
-        "-D", "-",          # 输出响应头到 stdout
-        "--max-time", str(timeout),
-        "-o", "-",          # 输出 body 到 stdout
+        "-D",
+        "-",  # 输出响应头到 stdout
+        "--max-time",
+        str(timeout),
+        "-o",
+        "-",  # 输出 body 到 stdout
     ]
     if impersonate:
         args += _CURL_IMPERSONATE_FLAGS
@@ -130,7 +138,9 @@ def _build_curl_args(url, method, headers, timeout, impersonate, stream, extra_f
     return args
 
 
-def _curl_request(url, method="GET", headers=None, timeout=15, impersonate=None, stream=False):
+def _curl_request(
+    url, method="GET", headers=None, timeout=15, impersonate=None, stream=False
+):
     """用系统 curl 发送请求并解析响应。"""
     args = _build_curl_args(url, method, headers, timeout, impersonate, stream)
     try:
@@ -179,15 +189,17 @@ class Session:
                 for field, path in files.items():
                     with open(path, "rb") as f:
                         cffi_files[field] = (os.path.basename(path), f.read())
-            return self._cffi.post(url, data=data or {}, files=cffi_files,
-                                   headers=headers, timeout=timeout)
+            return self._cffi.post(
+                url, data=data or {}, files=cffi_files, headers=headers, timeout=timeout
+            )
         flags = []
         for k, v in (data or {}).items():
             flags += ["-F", f"{k}={v}"]
         for field, path in (files or {}).items():
             flags += ["-F", f"{field}=@{path}"]
-        return _curl_request(url, "POST", headers, timeout, None, False,
-                             extra_flags=flags)
+        return _curl_request(
+            url, "POST", headers, timeout, None, False, extra_flags=flags
+        )
 
     def close(self):
         if self._cffi is not None:

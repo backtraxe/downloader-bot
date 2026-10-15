@@ -13,13 +13,18 @@ Termux 典型用法（配合 Termux:API，扩展导出复制到剪贴板后一�
 桌面端也可把扩展导出的文件直接喂进来：
     python cookie_import.py bilibili < ~/Downloads/cookies.txt
 """
+
 import argparse
 import json
 import sys
 
 from .sites import cookie_file_for
-from .utils import (cookie_header_to_netscape, cookie_list_to_header,
-                    cookie_list_to_netscape, cookie_text_to_header)
+from .utils import (
+    cookie_header_to_netscape,
+    cookie_list_to_header,
+    cookie_list_to_netscape,
+    cookie_text_to_header,
+)
 
 # 各站点输出格式与兜底域名（header → netscape 转换需要指定 cookie 域；
 # header 转 xhs 请求头无需过滤，文件本就只装本站 cookie）
@@ -62,7 +67,7 @@ def _strip_cookie_label(header):
     """浏览器复制时可能带上 "Cookie:" 标签行首，剥掉只留 k=v 整段。"""
     t = (header or "").strip()
     if t.lower().startswith("cookie:"):
-        t = t[len("cookie:"):].strip()
+        t = t[len("cookie:") :].strip()
     return t
 
 
@@ -98,7 +103,8 @@ def convert_to_site_format(text, site):
 def main():
     parser = argparse.ArgumentParser(
         description="把 stdin 的 Cookie 文本（JSON / Cookie头 / Netscape "
-                    "自动识别）按站点所需格式写入 cookies/<站点>.txt")
+        "自动识别）按站点所需格式写入 cookies/<站点>.txt"
+    )
     parser.add_argument("site", choices=sorted(_SITES), help="目标站点")
     args = parser.parse_args()
 
@@ -112,8 +118,10 @@ def main():
     path = cookie_file_for(args.site)
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
-    print(f"已写入 {path}（识别格式：{detect_format(text)}，"
-          f"输出格式：{_SITES[args.site]['format']}）")
+    print(
+        f"已写入 {path}（识别格式：{detect_format(text)}，"
+        f"输出格式：{_SITES[args.site]['format']}）"
+    )
     print("可直接开始下载；cookies/ 已在 .gitignore 中，请勿提交。")
     return 0
 

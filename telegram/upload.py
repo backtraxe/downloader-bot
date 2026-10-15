@@ -16,6 +16,7 @@
 限制：Bot API 上传单文件 ≤50MB；图片 >10MB 自动改按文件发送（Telegram
 photo 上限）；超限走自建 telegram-bot-api（2GB）不在本脚本范围。
 """
+
 import argparse
 import json
 import logging
@@ -47,6 +48,7 @@ class TgError(RuntimeError):
 
 # ---------------- 配置与媒体规划（纯函数） ----------------
 
+
 def load_config(path=None, legacy_path=None):
     """读 config.json 的 telegram 段；缺文件/字段未填时写模板并返回 None。
 
@@ -72,8 +74,11 @@ def collect_media(target):
     if os.path.isfile(target):
         return [target]
     names = sorted(n for n in os.listdir(target) if not n.startswith("."))
-    return [os.path.join(target, n) for n in names
-            if os.path.isfile(os.path.join(target, n))]
+    return [
+        os.path.join(target, n)
+        for n in names
+        if os.path.isfile(os.path.join(target, n))
+    ]
 
 
 def plan_uploads(files, document=False, size_of=os.path.getsize):
@@ -114,8 +119,8 @@ def plan_uploads(files, document=False, size_of=os.path.getsize):
 
 # ---------------- Bot API 调用 ----------------
 
-def call_api(session, cfg, method, data, files=None, retries=3,
-             _sleep=time.sleep):
+
+def call_api(session, cfg, method, data, files=None, retries=3, _sleep=time.sleep):
     """调 Bot API，返回 result；429 按 retry_after 等待，5xx/网络异常退避。"""
     url = f"{_API_BASE}/bot{cfg['bot_token']}/{method}"
     last_err = None
@@ -133,7 +138,7 @@ def call_api(session, cfg, method, data, files=None, retries=3,
             return payload.get("result")
         code = payload.get("error_code")
         if code == 429 and attempt < retries:
-            wait = ((payload.get("parameters") or {}).get("retry_after") or 3)
+            wait = (payload.get("parameters") or {}).get("retry_after") or 3
             logger.warning("Telegram 限流，%ss 后重试", wait)
             _sleep(wait)
             continue
@@ -163,10 +168,13 @@ def upload(session, cfg, target, document=False, caption=None, chat_id=None):
             continue
         if kind == "album":
             if len(payload) == 1:
-                call_api(session, cfg, "sendPhoto",
-                         {"chat_id": chat_id,
-                          "caption": _caption_for(payload[0], caption)},
-                         {"photo": payload[0]})
+                call_api(
+                    session,
+                    cfg,
+                    "sendPhoto",
+                    {"chat_id": chat_id, "caption": _caption_for(payload[0], caption)},
+                    {"photo": payload[0]},
+                )
             else:
                 media, files_map = [], {}
                 for i, path in enumerate(payload):
@@ -176,18 +184,29 @@ def upload(session, cfg, target, document=False, caption=None, chat_id=None):
                         item["caption"] = caption
                     media.append(item)
                     files_map[attach] = path
-                call_api(session, cfg, "sendMediaGroup",
-                         {"chat_id": chat_id, "media": json.dumps(
-                             media, ensure_ascii=False)}, files_map)
-            logger.info("相册 %d 张已发送：%s…", len(payload),
-                        os.path.basename(payload[0]))
+                call_api(
+                    session,
+                    cfg,
+                    "sendMediaGroup",
+                    {
+                        "chat_id": chat_id,
+                        "media": json.dumps(media, ensure_ascii=False),
+                    },
+                    files_map,
+                )
+            logger.info(
+                "相册 %d 张已发送：%s…", len(payload), os.path.basename(payload[0])
+            )
             sent += len(payload)
         else:
             method = "sendVideo" if kind == "video" else "sendDocument"
-            call_api(session, cfg, method,
-                     {"chat_id": chat_id,
-                      "caption": _caption_for(payload, caption)},
-                     {"video" if kind == "video" else "document": payload})
+            call_api(
+                session,
+                cfg,
+                method,
+                {"chat_id": chat_id, "caption": _caption_for(payload, caption)},
+                {"video" if kind == "video" else "document": payload},
+            )
             logger.info("已发送（%s）：%s", kind, os.path.basename(payload))
             sent += 1
     return sent, skipped
@@ -195,28 +214,35 @@ def upload(session, cfg, target, document=False, caption=None, chat_id=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="把 download/ 产物上传到 Telegram（Bot API）")
+        description="把 download/ 产物上传到 Telegram（Bot API）"
+    )
     parser.add_argument("target", help="文件或目录")
-    parser.add_argument("--document", action="store_true",
-                        help="全部按文件发送（原图不被压缩）")
+    parser.add_argument(
+        "--document", action="store_true", help="全部按文件发送（原图不被压缩）"
+    )
     parser.add_argument("--caption", default=None, help="说明文字")
-    parser.add_argument("--config", default=None,
-                        help="配置文件路径（默认 config.json）")
+    parser.add_argument(
+        "--config", default=None, help="配置文件路径（默认 config.json）"
+    )
     args = parser.parse_args()
 
     setup_logging()
     cfg = load_config(args.config)
     if cfg is None:
-        print(f"请先在 {args.config or core_config.CONFIG_PATH} 的 telegram 段填入 bot_token 与 chat_id：\n"
-              "  1. 找 @BotFather /newbot 拿 token\n"
-              "  2. 给 bot 发一条消息，打开 "
-              "https://api.telegram.org/bot<token>/getUpdates 取 chat.id\n"
-              "  （模板已自动生成）", file=sys.stderr)
+        print(
+            f"请先在 {args.config or core_config.CONFIG_PATH} 的 telegram 段填入 bot_token 与 chat_id：\n"
+            "  1. 找 @BotFather /newbot 拿 token\n"
+            "  2. 给 bot 发一条消息，打开 "
+            "https://api.telegram.org/bot<token>/getUpdates 取 chat.id\n"
+            "  （模板已自动生成）",
+            file=sys.stderr,
+        )
         return 1
     session = http_client.Session()
     try:
-        sent, skipped = upload(session, cfg, args.target,
-                               document=args.document, caption=args.caption)
+        sent, skipped = upload(
+            session, cfg, args.target, document=args.document, caption=args.caption
+        )
     except TgError as e:
         print(str(e), file=sys.stderr)
         return 1

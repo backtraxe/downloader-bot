@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """http_client.py 纯函数单元测试（无网络）。"""
+
 import pytest
 
 from core.http_client import (
@@ -12,9 +13,12 @@ from core.http_client import (
 
 # ---------------- CurlResponse ----------------
 
+
 class TestCurlResponse:
     def test_text_decodes_bytes(self):
-        r = CurlResponse(200, {"content-type": "text/html"}, b"<html>hello</html>", "http://x")
+        r = CurlResponse(
+            200, {"content-type": "text/html"}, b"<html>hello</html>", "http://x"
+        )
         assert r.text == "<html>hello</html>"
         assert r.content == b"<html>hello</html>"
 
@@ -55,6 +59,7 @@ class TestCurlResponse:
 
 # ---------------- _parse_response_blocks ----------------
 
+
 class TestParseResponseBlocks:
     def test_single_block(self):
         raw = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\nhello"
@@ -83,7 +88,9 @@ class TestParseResponseBlocks:
             b"HTTP/1.1 302 Found\r\nLocation: https://www.douyin.com/note/123?t=1\r\nContent-Length: 0\r\n\r\n"
             b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\nBODY"
         )
-        status, headers, body, effective_url = _parse_response_blocks(raw, "https://v.douyin.com/abc")
+        status, headers, body, effective_url = _parse_response_blocks(
+            raw, "https://v.douyin.com/abc"
+        )
         assert status == 200
         assert effective_url == "https://www.douyin.com/note/123?t=1"
 
@@ -94,6 +101,7 @@ class TestParseResponseBlocks:
 
 
 # ---------------- _build_curl_args ----------------
+
 
 class TestBuildCurlArgs:
     def test_basic_get(self):
@@ -115,7 +123,9 @@ class TestBuildCurlArgs:
         assert "--http2" not in args
 
     def test_headers_passed(self):
-        args = _build_curl_args("http://x", "GET", {"Cookie": "abc", "Referer": "http://y"}, 15, None, False)
+        args = _build_curl_args(
+            "http://x", "GET", {"Cookie": "abc", "Referer": "http://y"}, 15, None, False
+        )
         h_strings = [args[i + 1] for i, v in enumerate(args) if v == "-H"]
         assert any("Cookie: abc" in h for h in h_strings)
         assert any("Referer: http://y" in h for h in h_strings)

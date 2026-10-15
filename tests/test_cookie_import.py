@@ -1,16 +1,21 @@
 # -*- coding: utf-8 -*-
 """cookie_import.py 格式识别与转换的纯函数测试"""
+
 import pytest
 
 from core.cookie_import import convert_to_site_format, detect_format
 
 _HEADER = "sessionid=abc123; ttwid=xyz; UIFID=u-1"
-_NETSCAPE = ("# Netscape HTTP Cookie File\n"
-             ".douyin.com\tTRUE\t/\tTRUE\t4070908800\tsessionid\tabc123\n"
-             ".douyin.com\tTRUE\t/\tFALSE\t4070908800\tttwid\txyz\n")
-_JSON = ('[{"name": "web_session", "value": "s1", "domain": ".xiaohongshu.com",'
-         ' "path": "/", "secure": true, "expires": -1},'
-         ' {"name": "tracker", "value": "t", "domain": ".third-party.com"}]')
+_NETSCAPE = (
+    "# Netscape HTTP Cookie File\n"
+    ".douyin.com\tTRUE\t/\tTRUE\t4070908800\tsessionid\tabc123\n"
+    ".douyin.com\tTRUE\t/\tFALSE\t4070908800\tttwid\txyz\n"
+)
+_JSON = (
+    '[{"name": "web_session", "value": "s1", "domain": ".xiaohongshu.com",'
+    ' "path": "/", "secure": true, "expires": -1},'
+    ' {"name": "tracker", "value": "t", "domain": ".third-party.com"}]'
+)
 
 
 class TestDetectFormat:
@@ -72,7 +77,8 @@ class TestConvertJsonInput:
     def test_json_wrapped(self):
         out = convert_to_site_format(
             '{"cookies": [{"name": "a", "value": "1", "domain": ".douyin.com"}]}',
-            "douyin")
+            "douyin",
+        )
         assert "\ta\t1\n" in out
 
 

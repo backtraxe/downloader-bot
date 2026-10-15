@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """telegram/bot.py 纯函数与消息流测试（假 dispatch + 假 session，不联网）"""
+
 import json
 import os
 
@@ -21,6 +22,7 @@ class _Resp:
 
 class _Session:
     """记录 Bot API 调用：(方法名, data)。"""
+
     def __init__(self):
         self.sent = []
 
@@ -55,6 +57,7 @@ def _touch(path, b=b"x"):
 
 # ---------------- make_tag / build_caption ----------------
 
+
 class TestTags:
     def test_make_tag_sanitizes(self):
         assert make_tag("张三 三") == "#张三_三"
@@ -75,6 +78,7 @@ class TestTags:
 
 # ---------------- 快照与元数据 ----------------
 
+
 class TestSnapshotAndMeta:
     def test_group_new_files(self, tmp_path):
         root = str(tmp_path / "download")
@@ -85,8 +89,10 @@ class TestSnapshotAndMeta:
         _touch(os.path.join(root, "site", "单文件.mp4"))
         groups = group_new_files(before, root)
         key = os.path.join("douyin", "a", "t")
-        assert groups[key] == [os.path.join(key, "001.jpg"),
-                               os.path.join(key, "video.mp4")]
+        assert groups[key] == [
+            os.path.join(key, "001.jpg"),
+            os.path.join(key, "video.mp4"),
+        ]
         assert groups["site"] == [os.path.join("site", "单文件.mp4")]
 
     def test_group_unchanged_excluded(self, tmp_path):
@@ -96,18 +102,31 @@ class TestSnapshotAndMeta:
         assert group_new_files(before, root) == {}
 
     def test_parse_post_meta(self):
-        assert parse_post_meta(os.path.join("bilibili", "张三", "标题_1"),
-                               []) == ("bilibili", "张三", "标题_1")
-        assert parse_post_meta(os.path.join("bilibili", "标题_1"),
-                               []) == ("bilibili", "", "标题_1")
+        assert parse_post_meta(os.path.join("bilibili", "张三", "标题_1"), []) == (
+            "bilibili",
+            "张三",
+            "标题_1",
+        )
+        assert parse_post_meta(os.path.join("bilibili", "标题_1"), []) == (
+            "bilibili",
+            "",
+            "标题_1",
+        )
         # 散文件：download/<site>/<作者>?/<标题>.mp4 → group_key 为空
-        assert parse_post_meta("", [os.path.join("douyin", "背影", "标题_1.mp4")]) == \
-            ("douyin", "背影", "标题_1")
-        assert parse_post_meta("", [os.path.join("youtube", "标题.mp4")]) == \
-            ("youtube", "", "标题")
+        assert parse_post_meta("", [os.path.join("douyin", "背影", "标题_1.mp4")]) == (
+            "douyin",
+            "背影",
+            "标题_1",
+        )
+        assert parse_post_meta("", [os.path.join("youtube", "标题.mp4")]) == (
+            "youtube",
+            "",
+            "标题",
+        )
 
 
 # ---------------- 消息流 ----------------
+
 
 class TestHandleMessage:
     def test_unauthorized_no_dispatch(self):
@@ -117,8 +136,9 @@ class TestHandleMessage:
             calls.append(url)
 
         s = _Session()
-        replies = handle_message(s, _CFG, _msg("https://x.com/a", user_id=999),
-                                 dispatch=dispatch)
+        replies = handle_message(
+            s, _CFG, _msg("https://x.com/a", user_id=999), dispatch=dispatch
+        )
         assert calls == []  # 未授权不消耗下载
         assert any("未授权" in r and "999" in r for r in replies)
         assert s.sent[0][0] == "sendMessage"
@@ -138,8 +158,13 @@ class TestHandleMessage:
             _touch(os.path.join(d, "video.mp4"))
 
         s = _Session()
-        replies = handle_message(s, _CFG, _msg("看看 https://v.douyin.com/abc 好美"),
-                                 dispatch=dispatch, download_root=root)
+        replies = handle_message(
+            s,
+            _CFG,
+            _msg("看看 https://v.douyin.com/abc 好美"),
+            dispatch=dispatch,
+            download_root=root,
+        )
         methods = [m for m, _ in s.sent]
         # sendMessage(开始) + sendMediaGroup + sendVideo + sendMessage(完成)
         assert methods.count("sendMediaGroup") == 1
@@ -154,9 +179,13 @@ class TestHandleMessage:
 
     def test_no_new_files_notice(self, tmp_path):
         s = _Session()
-        replies = handle_message(s, _CFG, _msg("https://x.com/a"),
-                                 dispatch=lambda u: None,
-                                 download_root=str(tmp_path / "download"))
+        replies = handle_message(
+            s,
+            _CFG,
+            _msg("https://x.com/a"),
+            dispatch=lambda u: None,
+            download_root=str(tmp_path / "download"),
+        )
         assert any("没有新产物" in r for r in replies)
 
     def test_dispatch_error_reported(self, tmp_path):
@@ -164,9 +193,13 @@ class TestHandleMessage:
             raise RuntimeError("风控拦截")
 
         s = _Session()
-        replies = handle_message(s, _CFG, _msg("https://x.com/a"),
-                                 dispatch=boom,
-                                 download_root=str(tmp_path / "download"))
+        replies = handle_message(
+            s,
+            _CFG,
+            _msg("https://x.com/a"),
+            dispatch=boom,
+            download_root=str(tmp_path / "download"),
+        )
         assert any("下载失败" in r and "风控拦截" in r for r in replies)
 
     def test_start_help(self):

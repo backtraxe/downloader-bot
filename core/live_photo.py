@@ -16,6 +16,7 @@
                        <stem>_ios.mov 到源目录——用户需经支持 Live Photo 的
                        App/快捷指令导入图库后才会显示为实况（无法仅靠文件落盘）。
 """
+
 import argparse
 import glob
 import io
@@ -102,11 +103,11 @@ def digest_motion_photo(muxed):
     """反向拆解：把 mux 后的单文件拆回 (jpeg_bytes, video_bytes)。
 
     依据：MicroVideoOffset = 视频长度，从文件尾回溯。用于测试与自检。"""
-    xmp_start = muxed.find(b"MicroVideoOffset=\"")
+    xmp_start = muxed.find(b'MicroVideoOffset="')
     if xmp_start == -1:
         raise ValueError("不是 Motion Photo 文件：缺少 MicroVideoOffset")
-    vlen_start = xmp_start + len(b"MicroVideoOffset=\"")
-    vlen_end = muxed.find(b"\"", vlen_start)
+    vlen_start = xmp_start + len(b'MicroVideoOffset="')
+    vlen_end = muxed.find(b'"', vlen_start)
     vlen = int(muxed[vlen_start:vlen_end])
     video = muxed[-vlen:]
     jpeg = muxed[:-vlen]
@@ -164,15 +165,29 @@ def process_ios(image_path, video_path, out_dir=None):
     shutil.copy2(image_path, out_img)
     shutil.copy2(video_path, out_mov)
     # 静态图：写 Apple MakerNote ContentIdentifier
-    subprocess.run([
-        "exiftool", "-overwrite_original", "-q",
-        f"-MakerApple:ContentIdentifier={pair_id}", out_img,
-    ], check=True, capture_output=True)
+    subprocess.run(
+        [
+            "exiftool",
+            "-overwrite_original",
+            "-q",
+            f"-MakerApple:ContentIdentifier={pair_id}",
+            out_img,
+        ],
+        check=True,
+        capture_output=True,
+    )
     # 视频：写 QuickTime metadata content.identifier（同值配对）
-    subprocess.run([
-        "exiftool", "-overwrite_original", "-q",
-        f"-com.apple.quicktime.content.identifier={pair_id}", out_mov,
-    ], check=True, capture_output=True)
+    subprocess.run(
+        [
+            "exiftool",
+            "-overwrite_original",
+            "-q",
+            f"-com.apple.quicktime.content.identifier={pair_id}",
+            out_mov,
+        ],
+        check=True,
+        capture_output=True,
+    )
     return out_img, out_mov
 
 
@@ -181,11 +196,16 @@ def main():
         description="把实况照片对打包成平台可用格式（Android Motion Photo / iOS 配对元数据）"
     )
     parser.add_argument("directory", help="实况照片目录（含 001.heic+001.mp4 等对儿）")
-    parser.add_argument("--android", action="store_true", default=True,
-                        help="生成 Motion Photo 单文件（默认开启）")
+    parser.add_argument(
+        "--android",
+        action="store_true",
+        default=True,
+        help="生成 Motion Photo 单文件（默认开启）",
+    )
     parser.add_argument("--no-android", dest="android", action="store_false")
-    parser.add_argument("--ios", action="store_true",
-                        help="用 exiftool 写 iOS 配对元数据")
+    parser.add_argument(
+        "--ios", action="store_true", help="用 exiftool 写 iOS 配对元数据"
+    )
     args = parser.parse_args()
 
     pairs = find_pairs(args.directory)
@@ -203,8 +223,12 @@ def main():
                 logger.info("  [Android] %s -> %s", stem, os.path.basename(out))
             if args.ios:
                 img_out, mov_out = process_ios(image_path, video_path)
-                logger.info("  [iOS] %s -> %s + %s", stem,
-                            os.path.basename(img_out), os.path.basename(mov_out))
+                logger.info(
+                    "  [iOS] %s -> %s + %s",
+                    stem,
+                    os.path.basename(img_out),
+                    os.path.basename(mov_out),
+                )
             succeeded += 1
         except Exception as e:  # noqa: BLE001 单边失败不阻断其余
             logger.error("  [失败] %s: %s", stem, e)

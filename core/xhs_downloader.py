@@ -26,8 +26,10 @@ logger = setup_logging()
 # 失效），chrome150 + UA150 一致组合即使无 Cookie 也能进笔记页。
 # 因此不再用 fake_useragent 随机 UA（与 impersonate 指纹版本必然不一致）。
 _IMPERSONATE = "chrome150"
-_UA150 = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-          "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
+_UA150 = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+)
 
 
 def get_headers(cookie):
@@ -51,7 +53,7 @@ def ensure_https(url):
     if url.startswith("//"):
         return "https:" + url
     if url.startswith("http://"):
-        return "https://" + url[len("http://"):]
+        return "https://" + url[len("http://") :]
     return url
 
 
@@ -59,16 +61,16 @@ def _is_transient_error(err):
     """判断是否为值得重试的瞬时网络错误（DNS 解析失败、超时、连接重置等）。"""
     err_str = str(err).lower()
     keywords = (
-        "no address associated with hostname",   # DNS 解析失败
-        "name or service not known",             # DNS 解析失败 (Linux)
-        "nodename nor servname provided",        # DNS 解析失败 (macOS)
-        "max retries exceeded",                  # 连接池耗尽/重试上限
-        "connection to",                         # 连接被拒/断开
-        "connection reset",                      # 连接被重置
-        "connection aborted",                    # 连接中断
-        "read timed out",                        # 读取超时
-        "connect timeout",                       # 连接超时
-        "timeout",                                # 通用超时
+        "no address associated with hostname",  # DNS 解析失败
+        "name or service not known",  # DNS 解析失败 (Linux)
+        "nodename nor servname provided",  # DNS 解析失败 (macOS)
+        "max retries exceeded",  # 连接池耗尽/重试上限
+        "connection to",  # 连接被拒/断开
+        "connection reset",  # 连接被重置
+        "connection aborted",  # 连接中断
+        "read timed out",  # 读取超时
+        "connect timeout",  # 连接超时
+        "timeout",  # 通用超时
     )
     return any(kw in err_str for kw in keywords)
 
@@ -100,8 +102,9 @@ def download_file(session, url, filepath, headers, max_retries=5):
         try:
             # 引入 0.1 ~ 0.5 秒的随机延迟，防止并发过高被瞬间阻断连接
             time.sleep(random.uniform(0.1, 0.5))
-            r = session.get(url, headers=headers, stream=True, timeout=15,
-                            impersonate=_IMPERSONATE)
+            r = session.get(
+                url, headers=headers, stream=True, timeout=15, impersonate=_IMPERSONATE
+            )
             r.raise_for_status()
 
             # 从响应头推断真实扩展名，修正 filepath（避免 webp 存成 .jpg）
@@ -132,7 +135,11 @@ def download_file(session, url, filepath, headers, max_retries=5):
                 wait = attempt * 3 + random.uniform(0, 1)
                 logger.warning(
                     "  [重试 %d/%d] %s 将在 %.1fs 后重试: %s",
-                    attempt, max_retries, os.path.basename(filepath), wait, e,
+                    attempt,
+                    max_retries,
+                    os.path.basename(filepath),
+                    wait,
+                    e,
                 )
                 time.sleep(wait)
                 continue
@@ -175,15 +182,17 @@ def extract_video_url(video):
     h264 列表含多档画质时（qualityType HD/SD/LD、videoBitrate），
     选画质最高的一档而非首项，确保拿到原画。"""
     media = (video or {}).get("media") or {}
-    stream = (media.get("stream") or {})
+    stream = media.get("stream") or {}
     h264_list = stream.get("h264") or []
     if h264_list and isinstance(h264_list, list):
+
         def _quality(s):
             s = s or {}
             return (
                 _STREAM_QUALITY_RANK.get(str(s.get("qualityType") or "").upper(), 0),
                 s.get("videoBitrate") or 0,
             )
+
         master = max((s or {} for s in h264_list), key=_quality).get("masterUrl")
         if master:
             return master, None
@@ -214,7 +223,8 @@ def resolve_xhs_basename(note):
     if desc:
         # 清洗 desc 中 "#tag[话题]#" 标记为标准 "#tag"
         cleaned = sanitize_filename(
-            re.sub(r"#([^\s#\[\]]+)\[话题\]#", r"#\1", desc)[:30], default="")
+            re.sub(r"#([^\s#\[\]]+)\[话题\]#", r"#\1", desc)[:30], default=""
+        )
         if cleaned:
             return cleaned
 
@@ -239,7 +249,11 @@ def extract_live_photo_stream(img):
         return None
     stream = img.get("stream") or {}
     for key in ("EF4", "EF5", "EF6", "EF7"):
-        candidates = [s for s in (stream.get(key) or []) if isinstance(s, dict) and s.get("masterUrl")]
+        candidates = [
+            s
+            for s in (stream.get(key) or [])
+            if isinstance(s, dict) and s.get("masterUrl")
+        ]
         if not candidates:
             continue
         best = max(
@@ -269,7 +283,11 @@ def detect_risk_control(html, response):
     final_url = (response.url or "").lower() if response is not None else ""
     parsed = urlparse(final_url)
     url_hostpath = parsed.netloc + parsed.path
-    if "verify" in url_hostpath or "/login" in url_hostpath or "captcha" in url_hostpath:
+    if (
+        "verify" in url_hostpath
+        or "/login" in url_hostpath
+        or "captcha" in url_hostpath
+    ):
         return True
     return False
 
@@ -325,8 +343,13 @@ def _fetch_page(session, url, headers, max_retries=5):
     last_err = None
     for attempt in range(1, max_retries + 1):
         try:
-            response = session.get(url, headers=headers, allow_redirects=True,
-                                   timeout=15, impersonate=_IMPERSONATE)
+            response = session.get(
+                url,
+                headers=headers,
+                allow_redirects=True,
+                timeout=15,
+                impersonate=_IMPERSONATE,
+            )
             response.raise_for_status()
             return response
         except Exception as e:
@@ -335,7 +358,10 @@ def _fetch_page(session, url, headers, max_retries=5):
                 wait = attempt * 3 + random.uniform(0, 1)
                 logger.warning(
                     "请求重试 %d/%d 将在 %.1fs 后重试: %s",
-                    attempt, max_retries, wait, e,
+                    attempt,
+                    max_retries,
+                    wait,
+                    e,
                 )
                 time.sleep(wait)
                 continue
@@ -393,9 +419,14 @@ def download_xhs_media(url, cookie):
         return
 
     # 贪婪匹配到最后一个 } 后接 </script>，避免被内部 }</script> 截断
-    state_match = re.search(r"window\.__INITIAL_STATE__\s*=\s*(\{.*\})\s*</script>", html, re.DOTALL)
+    state_match = re.search(
+        r"window\.__INITIAL_STATE__\s*=\s*(\{.*\})\s*</script>", html, re.DOTALL
+    )
     if not state_match:
-        logger.error("未能找到页面数据。可能是页面结构变更或 Cookie 失效。（耗时 %.1f 秒）", time.time() - start_time)
+        logger.error(
+            "未能找到页面数据。可能是页面结构变更或 Cookie 失效。（耗时 %.1f 秒）",
+            time.time() - start_time,
+        )
         return
 
     try:
@@ -409,7 +440,10 @@ def download_xhs_media(url, cookie):
     try:
         note_data = data.get("note", {}).get("noteDetailMap", {})
         if not note_data:
-            logger.error("提取详情失败，页面结构可能已更新。（耗时 %.1f 秒）", time.time() - start_time)
+            logger.error(
+                "提取详情失败，页面结构可能已更新。（耗时 %.1f 秒）",
+                time.time() - start_time,
+            )
             return
 
         note_id = list(note_data.keys())[0]
@@ -487,17 +521,27 @@ def download_xhs_media(url, cookie):
                 elapsed = time.time() - start_time
                 logger.info(
                     "下载完成：%d 成功 / %d 失败 / 共 %d 项，耗时 %.1f 秒",
-                    succeeded, failed, len(download_tasks), elapsed,
+                    succeeded,
+                    failed,
+                    len(download_tasks),
+                    elapsed,
                 )
         else:
-            logger.info("未发现可下载的媒体文件，耗时 %.1f 秒。", time.time() - start_time)
+            logger.info(
+                "未发现可下载的媒体文件，耗时 %.1f 秒。", time.time() - start_time
+            )
 
         session.close()
         logger.info("📁 保存目录: %s", os.path.abspath(base_path))
         logger.info("该链接处理完成，耗时 %.1f 秒。", time.time() - start_time)
 
     except Exception as e:
-        logger.error("解析数据时发生意外错误: %s（耗时 %.1f 秒）", e, time.time() - start_time, exc_info=True)
+        logger.error(
+            "解析数据时发生意外错误: %s（耗时 %.1f 秒）",
+            e,
+            time.time() - start_time,
+            exc_info=True,
+        )
 
 
 def main():
@@ -529,7 +573,9 @@ def main():
                 if site_name == "xiaohongshu":
                     download_xhs_media(target_url, site_cookie)
                 else:
-                    logger.warning("目前还没有编写 %s 的解析代码，仅支持小红书。", site_name)
+                    logger.warning(
+                        "目前还没有编写 %s 的解析代码，仅支持小红书。", site_name
+                    )
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """core.downloader.py 纯函数单元测试（无网络依赖）"""
+
 import os
 
 import pytest
@@ -8,6 +9,7 @@ from core.downloader import build_ydl_opts, resolve_uploader
 
 
 # ---------------- resolve_uploader ----------------
+
 
 class TestResolveUploader:
     def test_normal(self):
@@ -30,24 +32,32 @@ class TestResolveUploader:
 
 # ---------------- build_ydl_opts (author 层) ----------------
 
+
 class TestBuildYdlOptsAuthor:
     def test_outtmpl_no_author(self):
         opts = build_ydl_opts("bilibili")
-        assert opts["outtmpl"] == os.path.join("download", "bilibili", "%(title).200B.%(ext)s")
+        assert opts["outtmpl"] == os.path.join(
+            "download", "bilibili", "%(title).200B.%(ext)s"
+        )
 
     def test_outtmpl_empty_author_falls_back(self):
         # author="" → 退化为无作者层，不产生 NA/ 或 unknown/
         opts = build_ydl_opts("bilibili", author="")
-        assert opts["outtmpl"] == os.path.join("download", "bilibili", "%(title).200B.%(ext)s")
+        assert opts["outtmpl"] == os.path.join(
+            "download", "bilibili", "%(title).200B.%(ext)s"
+        )
 
     def test_outtmpl_with_author(self):
         opts = build_ydl_opts("bilibili", author="某UP")
         assert opts["outtmpl"] == os.path.join(
-            "download", "bilibili", "某UP", "%(title).200B.%(ext)s")
+            "download", "bilibili", "某UP", "%(title).200B.%(ext)s"
+        )
 
     def test_cookiefile_none_when_no_cookie_file(self, tmp_path, monkeypatch):
         # cookie 文件不存在 → 不传 cookiefile，避免 yt-dlp 警告
-        monkeypatch.setattr("core.downloader.cookie_file_for", lambda s: str(tmp_path / "absent.txt"))
+        monkeypatch.setattr(
+            "core.downloader.cookie_file_for", lambda s: str(tmp_path / "absent.txt")
+        )
         opts = build_ydl_opts("bilibili")
         assert opts["cookiefile"] is None
 
@@ -56,6 +66,7 @@ class TestBuildYdlOptsAuthor:
 
 
 # ---------------- dispatch_url 路由 ----------------
+
 
 class TestDispatchUrl:
     """dispatch_url 按 site_name 分发到对应下载器，不触网。"""
@@ -70,7 +81,9 @@ class TestDispatchUrl:
             lambda url, cookie: calls.append(("xhs", url, cookie)),
         )
         downloader.dispatch_url("https://www.xiaohongshu.com/explore/abc")
-        assert calls == [("xhs", "https://www.xiaohongshu.com/explore/abc", "fake_cookie")]
+        assert calls == [
+            ("xhs", "https://www.xiaohongshu.com/explore/abc", "fake_cookie")
+        ]
 
     def test_xiaohongshu_no_cookie_skips_download(self, monkeypatch):
         import core.downloader as downloader
@@ -85,13 +98,16 @@ class TestDispatchUrl:
         downloader.dispatch_url("https://xhslink.com/abc")
         assert calls == []
 
-    @pytest.mark.parametrize("url", [
-        "https://www.youtube.com/watch?v=abc",
-        "https://www.bilibili.com/video/BV1xx",
-        "https://www.instagram.com/p/Cabc/",
-        "https://x.com/user/status/123",
-        "https://www.douyin.com/user/MS4wLjA",  # douyin 非作品页仍兜底 yt-dlp
-    ])
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://www.youtube.com/watch?v=abc",
+            "https://www.bilibili.com/video/BV1xx",
+            "https://www.instagram.com/p/Cabc/",
+            "https://x.com/user/status/123",
+            "https://www.douyin.com/user/MS4wLjA",  # douyin 非作品页仍兜底 yt-dlp
+        ],
+    )
     def test_ytdlp_sites_route_to_download_url(self, url, monkeypatch):
         import core.downloader as downloader
 
@@ -117,26 +133,33 @@ class TestDiagnoseError:
 
     def test_login_hint(self):
         from core.downloader import diagnose_error
+
         kind, _ = diagnose_error("Login required to access this video")
         assert kind == "need_login"
 
     def test_transient_ssl_eof(self):
         from core.downloader import diagnose_error
-        kind, _ = diagnose_error("Got error: SSL: UNEXPECTED_EOF_WHILE_READING EOF occurred in violation of protocol")
+
+        kind, _ = diagnose_error(
+            "Got error: SSL: UNEXPECTED_EOF_WHILE_READING EOF occurred in violation of protocol"
+        )
         assert kind == "transient"
 
     def test_transient_connection_reset(self):
         from core.downloader import diagnose_error
+
         kind, _ = diagnose_error("Connection reset by peer")
         assert kind == "transient"
 
     def test_transient_timeout(self):
         from core.downloader import diagnose_error
+
         kind, _ = diagnose_error("Read timed out")
         assert kind == "transient"
 
     def test_unknown(self):
         from core.downloader import diagnose_error
+
         kind, msg = diagnose_error("some weird error")
         assert kind == "unknown"
         assert msg == "some weird error"
@@ -147,6 +170,7 @@ class TestDiagnoseError:
         # 过期，实际是视频详情接口的系统性拦截——必须翻译成明确提示，
         # 防止用户白刷 Cookie（2026-10 实测，刷新 Cookie 无效）
         from core.downloader import diagnose_error
+
         kind, msg = diagnose_error(
             "[Douyin] 7556303777536740671: Fresh cookies (not necessarily "
             "logged in) are needed; please report this issue on "
@@ -158,19 +182,26 @@ class TestDiagnoseError:
 
 # ---------------- resolve_short_link ----------------
 
+
 class TestResolveShortLink:
     """resolve_short_link 对非短链直接返回，对短链用 http_client 展开。"""
 
     def test_non_short_link_returned_as_is(self):
         from core.downloader import resolve_short_link
+
         # 非短链域名不产生请求，原样返回
-        assert resolve_short_link("https://www.bilibili.com/video/BV1xx") == \
-            "https://www.bilibili.com/video/BV1xx"
+        assert (
+            resolve_short_link("https://www.bilibili.com/video/BV1xx")
+            == "https://www.bilibili.com/video/BV1xx"
+        )
 
     def test_non_short_link_youtube(self):
         from core.downloader import resolve_short_link
-        assert resolve_short_link("https://www.youtube.com/watch?v=abc") == \
-            "https://www.youtube.com/watch?v=abc"
+
+        assert (
+            resolve_short_link("https://www.youtube.com/watch?v=abc")
+            == "https://www.youtube.com/watch?v=abc"
+        )
 
     def test_short_link_resolved(self, monkeypatch):
         from core.downloader import resolve_short_link
@@ -237,7 +268,9 @@ class TestDispatchDouyinNoteRouting:
         )
         downloader.dispatch_url("https://www.douyin.com/note/7666381907030529443")
         # 原始文件内容（可能是 Netscape）经 cookie_text_to_header 转换为请求头
-        assert calls == [("note", "https://www.douyin.com/note/7666381907030529443", "raw_cookie")]
+        assert calls == [
+            ("note", "https://www.douyin.com/note/7666381907030529443", "raw_cookie")
+        ]
 
     def test_note_url_without_cookie_skips_download(self, monkeypatch):
         import core.downloader as downloader
@@ -266,10 +299,13 @@ class TestDispatchDouyinNoteRouting:
             "core.douyin_downloader.download_douyin_note",
             lambda url, cookie: note_calls.append(url),
         )
-        monkeypatch.setattr("core.downloader.download_url", lambda u: ytdlp_calls.append(u))
+        monkeypatch.setattr(
+            "core.downloader.download_url", lambda u: ytdlp_calls.append(u)
+        )
         downloader.dispatch_url("https://www.douyin.com/video/7666381907030529443")
         assert video_calls == [
-            ("https://www.douyin.com/video/7666381907030529443", "raw_cookie")]
+            ("https://www.douyin.com/video/7666381907030529443", "raw_cookie")
+        ]
         assert note_calls == [] and ytdlp_calls == []
 
     def test_video_url_without_cookie_skips_download(self, monkeypatch):
@@ -291,11 +327,13 @@ class TestResolveShortLinkWithRetry:
     def test_retries_until_expanded(self, monkeypatch):
         from core.downloader import resolve_short_link_with_retry
 
-        calls = iter([
-            "https://v.douyin.com/abc/",                      # 第 1 次无重定向
-            "https://v.douyin.com/abc/",                      # 第 2 次仍无
-            "https://www.douyin.com/note/123",                # 第 3 次成功
-        ])
+        calls = iter(
+            [
+                "https://v.douyin.com/abc/",  # 第 1 次无重定向
+                "https://v.douyin.com/abc/",  # 第 2 次仍无
+                "https://www.douyin.com/note/123",  # 第 3 次成功
+            ]
+        )
         monkeypatch.setattr("core.downloader.resolve_short_link", lambda u: next(calls))
         monkeypatch.setattr("core.downloader.time.sleep", lambda s: None)
         out = resolve_short_link_with_retry("https://v.douyin.com/abc/")
@@ -305,9 +343,11 @@ class TestResolveShortLinkWithRetry:
         from core.downloader import resolve_short_link_with_retry
 
         calls = []
+
         def fake_resolve(u):
             calls.append(u)
             return u
+
         monkeypatch.setattr("core.downloader.resolve_short_link", fake_resolve)
         monkeypatch.setattr("core.downloader.time.sleep", lambda s: None)
         out = resolve_short_link_with_retry("https://v.douyin.com/abc/")
@@ -319,7 +359,9 @@ class TestResolveShortLinkWithRetry:
         from core.downloader import resolve_short_link_with_retry
 
         calls = []
-        monkeypatch.setattr("core.downloader.resolve_short_link", lambda u: calls.append(u) or u)
+        monkeypatch.setattr(
+            "core.downloader.resolve_short_link", lambda u: calls.append(u) or u
+        )
         out = resolve_short_link_with_retry("https://www.douyin.com/note/123")
         assert out == "https://www.douyin.com/note/123"
         assert calls == []

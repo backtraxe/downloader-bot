@@ -32,7 +32,7 @@ telegram/
 根目录 downloader.py / xhs_downloader.py / douyin_downloader.py / 1024_downloader.py /
 live_photo.py / cookie_import.py / cookie_login.py / tg_bot.py / tg_upload.py = 兼容入口 shim
 conftest.py            # 让裸 pytest 也能从仓库根导入两个包
-ruff.toml              # 静态检查配置（只选 F/E9/W/B bug 类规则）
+ruff.toml              # ruff 配置：lint 只选 F/E9/W/B bug 类规则；整体排除 vendored 三件套
 setup_termux.sh        # Termux 首次使用配置脚本（仅 Termux 环境）
 tests/                 # pytest 单元测试（不联网），文件名与模块一一对应
 requirements.txt       # 依赖清单（requests / fake_useragent / beautifulsoup4 / curl_cffi / yt-dlp）
@@ -51,6 +51,7 @@ pip install pytest
 python -m pytest -q                                  # 单元测试，全部离线
 python downloader.py                                 # 统一入口，按 URL 自动路由
 ruff check .                                         # 静态检查（先 pip install ruff）
+ruff format .                                        # 代码格式化（black 兼容）
 ```
 
 根目录 conftest.py 会把项目根加入 sys.path，裸 `pytest -q` 与 `python -m pytest -q` 均可用。静态检查用 ruff（配置 ruff.toml，只选 F/E9/W/B 等 bug 类规则，不做风格重排），当前全绿。
@@ -94,6 +95,7 @@ ruff check .                                         # 静态检查（先 pip in
 ## 代码风格约定
 
 - Python 3，源码 UTF-8，带 `# -*- coding: utf-8 -*-` 头（部分老文件无此头，不必特意补）。
+- 格式由 `ruff format` 统一（black 兼容）；**vendored 签名三件套（douyin_abogus/douyin_sm3/douyin_websign）在 ruff.toml 里整体 exclude**，保持与 Evil0ctal 上游原样，便于风控改版后 diff 重新同步。
 - 4 空格缩进；函数 `snake_case`；模块级常量 `UPPER_CASE`。
 - **注释和用户可见消息用中文**，修改既有代码时沿用。
 - 并发维持 `max_workers=5`，避免触发 IP 熔断。

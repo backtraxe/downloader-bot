@@ -3,6 +3,7 @@
 
 被 core 内各下载模块共用，保证 URL→站点名 的映射全 core 口径一致。
 """
+
 import logging
 import os
 from urllib.parse import urlparse

@@ -1,9 +1,15 @@
 # -*- coding: utf-8 -*-
 """xhs_downloader.py 纯函数单元测试（无网络依赖）"""
-from core.xhs_downloader import detect_note_not_found, detect_risk_control, extract_xhs_author
+
+from core.xhs_downloader import (
+    detect_note_not_found,
+    detect_risk_control,
+    extract_xhs_author,
+)
 
 
 # ---------------- detect_note_not_found ----------------
+
 
 class TestDetectNoteNotFound:
     """真实短链 http://xhslink.com/o/AneP1u22JsY 落地到
@@ -31,7 +37,10 @@ class TestDetectNoteNotFound:
     def test_404_title_in_html(self):
         # 信号 3：页面 title 文案命中（URL 不含 /404、不含 errorCode）
         html = "<html><head><title>小红书 - 你访问的页面不见了</title></head></html>"
-        assert detect_note_not_found(html, "https://www.xiaohongshu.com/explore/abc") is True
+        assert (
+            detect_note_not_found(html, "https://www.xiaohongshu.com/explore/abc")
+            is True
+        )
 
     def test_normal_note_page_returns_false(self):
         # 正常详情页：URL 无 /404、无 errorCode、title 文案不命中
@@ -51,26 +60,42 @@ class TestDetectNoteNotFound:
 
 # ---------------- detect_risk_control 回归 ----------------
 
+
 class TestDetectRiskControlRegression:
     """确保新增 404 检测不破坏既有风控判定。"""
 
     def test_captcha_text_still_detected(self):
         html = "<html>请输入验证码</html>"
-        assert detect_risk_control(html, type("R", (), {"url": "https://www.xiaohongshu.com/explore/abc"})()) is True
+        assert (
+            detect_risk_control(
+                html,
+                type("R", (), {"url": "https://www.xiaohongshu.com/explore/abc"})(),
+            )
+            is True
+        )
 
     def test_frequency_text_still_detected(self):
         html = "<html>访问过于频繁</html>"
-        assert detect_risk_control(html, type("R", (), {"url": "https://www.xiaohongshu.com/explore/abc"})()) is True
+        assert (
+            detect_risk_control(
+                html,
+                type("R", (), {"url": "https://www.xiaohongshu.com/explore/abc"})(),
+            )
+            is True
+        )
 
     def test_404_page_not_treated_as_risk_control(self):
         # 404 落地页既无验证码文案、URL 也无 verify/login/captcha，
         # 风控分支应返回 False（交由 detect_note_not_found 处理）
         html = "<html><title>小红书 - 你访问的页面不见了</title></html>"
-        resp = type("R", (), {"url": "https://www.xiaohongshu.com/404?errorCode=-510001"})()
+        resp = type(
+            "R", (), {"url": "https://www.xiaohongshu.com/404?errorCode=-510001"}
+        )()
         assert detect_risk_control(html, resp) is False
 
 
 # ---------------- extract_xhs_author ----------------
+
 
 class TestExtractXhsAuthor:
     def test_nickname_key(self):
@@ -98,70 +123,98 @@ class TestExtractXhsAuthor:
 
 # ---------------- ensure_https ----------------
 
+
 class TestEnsureHttps:
     """媒体链接协议升级测试：http:// 和 // 统一升级为 https://，
     避免 CDN 图片走 80 端口因 DNS/网络问题失败。"""
 
     def test_http_upgraded_to_https(self):
         from core.xhs_downloader import ensure_https
+
         url = "http://sns-webpic-qc.xhscdn.com/202607100245/img.webp"
-        assert ensure_https(url) == "https://sns-webpic-qc.xhscdn.com/202607100245/img.webp"
+        assert (
+            ensure_https(url)
+            == "https://sns-webpic-qc.xhscdn.com/202607100245/img.webp"
+        )
 
     def test_protocol_relative_upgraded(self):
         from core.xhs_downloader import ensure_https
-        assert ensure_https("//sns-webpic-qc.xhscdn.com/img.webp") == "https://sns-webpic-qc.xhscdn.com/img.webp"
+
+        assert (
+            ensure_https("//sns-webpic-qc.xhscdn.com/img.webp")
+            == "https://sns-webpic-qc.xhscdn.com/img.webp"
+        )
 
     def test_https_unchanged(self):
         from core.xhs_downloader import ensure_https
+
         url = "https://sns-webpic-qc.xhscdn.com/img.webp"
         assert ensure_https(url) == url
 
     def test_empty_returns_empty(self):
         from core.xhs_downloader import ensure_https
+
         assert ensure_https("") == ""
 
     def test_none_returns_none(self):
         from core.xhs_downloader import ensure_https
+
         assert ensure_https(None) is None
 
 
 # ---------------- _is_transient_error ----------------
+
 
 class TestIsTransientError:
     """瞬时网络错误判定测试，确保 DNS 失败、超时等错误能触发重试。"""
 
     def test_dns_failure_is_transient(self):
         from core.xhs_downloader import _is_transient_error
-        err = Exception("HTTPConnectionPool: Failed to resolve 'sns-webpic-qc.xhscdn.com' "
-                        "([Errno 7] No address associated with hostname)")
+
+        err = Exception(
+            "HTTPConnectionPool: Failed to resolve 'sns-webpic-qc.xhscdn.com' "
+            "([Errno 7] No address associated with hostname)"
+        )
         assert _is_transient_error(err) is True
 
     def test_timeout_is_transient(self):
         from core.xhs_downloader import _is_transient_error
-        assert _is_transient_error(Exception("ConnectTimeoutError: connect timeout")) is True
+
+        assert (
+            _is_transient_error(Exception("ConnectTimeoutError: connect timeout"))
+            is True
+        )
 
     def test_connection_reset_is_transient(self):
         from core.xhs_downloader import _is_transient_error
-        assert _is_transient_error(Exception("ConnectionResetError: connection reset")) is True
+
+        assert (
+            _is_transient_error(Exception("ConnectionResetError: connection reset"))
+            is True
+        )
 
     def test_http_404_not_transient(self):
         from core.xhs_downloader import _is_transient_error
+
         err = Exception("404 Client Error: Not Found")
         assert _is_transient_error(err) is False
 
     def test_http_403_not_transient(self):
         from core.xhs_downloader import _is_transient_error
+
         err = Exception("403 Client Error: Forbidden")
         assert _is_transient_error(err) is False
 
 
 # ---------------- extract_image_url ----------------
 
+
 class TestExtractImageUrl:
     """图片直链解析：优先 ci.xiaohongshu.com/<fileId> 原图，回退展示版。"""
 
     def test_prefers_original_via_file_id(self):
         from core.xhs_downloader import extract_image_url
+
         img = {
             "fileId": "notes_pre_post/1040g3k0326247hhll66g5polqvp7ebfe4qhtshg",
             "urlDefault": "http://sns-webpic-qc.xhscdn.com/x/notes_pre_post/1040g3k0326247hhll66g5polqvp7ebfe4qhtshg!nd_dft_wlteh_webp_3",
@@ -172,49 +225,66 @@ class TestExtractImageUrl:
 
     def test_falls_back_to_url_default_without_file_id(self):
         from core.xhs_downloader import extract_image_url
+
         img = {"urlDefault": "http://cdn/x.jpg!nd_dft_wlteh_webp_3"}
         assert extract_image_url(img) == "http://cdn/x.jpg!nd_dft_wlteh_webp_3"
 
     def test_falls_back_chain(self):
         # urlDefault 缺失时沿用既有回退链：url -> infoList[0].url
         from core.xhs_downloader import extract_image_url
+
         assert extract_image_url({"url": "http://cdn/a.jpg"}) == "http://cdn/a.jpg"
-        assert extract_image_url({"infoList": [{"url": "http://cdn/b.jpg"}]}) == "http://cdn/b.jpg"
+        assert (
+            extract_image_url({"infoList": [{"url": "http://cdn/b.jpg"}]})
+            == "http://cdn/b.jpg"
+        )
         assert extract_image_url({}) is None
 
 
 # ---------------- extract_live_photo_stream ----------------
+
 
 class TestExtractLivePhotoStream:
     """实况照片每张 image 的 stream.EF4 里有 h264 视频流。"""
 
     def test_ef4_stream(self):
         from core.xhs_downloader import extract_live_photo_stream
+
         img = {
             "livePhoto": True,
-            "stream": {"EF5": [], "EF4": [{"masterUrl": "http://cdn/a.mp4", "qualityType": "HD"}], "EF6": [], "EF7": []},
+            "stream": {
+                "EF5": [],
+                "EF4": [{"masterUrl": "http://cdn/a.mp4", "qualityType": "HD"}],
+                "EF6": [],
+                "EF7": [],
+            },
         }
         assert extract_live_photo_stream(img) == "http://cdn/a.mp4"
 
     def test_not_live_photo_returns_none(self):
         from core.xhs_downloader import extract_live_photo_stream
+
         assert extract_live_photo_stream({"livePhoto": False, "stream": {}}) is None
         assert extract_live_photo_stream({}) is None
 
     def test_multi_quality_picks_best(self):
         from core.xhs_downloader import extract_live_photo_stream
+
         img = {
             "livePhoto": True,
-            "stream": {"EF4": [
-                {"masterUrl": "http://cdn/ld.mp4", "qualityType": "LD"},
-                {"masterUrl": "http://cdn/hd.mp4", "qualityType": "HD"},
-            ]},
+            "stream": {
+                "EF4": [
+                    {"masterUrl": "http://cdn/ld.mp4", "qualityType": "LD"},
+                    {"masterUrl": "http://cdn/hd.mp4", "qualityType": "HD"},
+                ]
+            },
         }
         assert extract_live_photo_stream(img) == "http://cdn/hd.mp4"
 
     def test_ef_key_fallback_order(self):
         # EF4 为空时尝试其他 EF 键
         from core.xhs_downloader import extract_live_photo_stream
+
         img = {
             "livePhoto": True,
             "stream": {"EF4": [], "EF5": [{"masterUrl": "http://cdn/e5.mp4"}]},
@@ -224,12 +294,18 @@ class TestExtractLivePhotoStream:
 
 # ---------------- extract_video_url ----------------
 
+
 class TestExtractVideoUrl:
     """视频直链解析测试，覆盖三个分支：h264 masterUrl / 顶层 url / 都没有。"""
 
     def test_h264_master_url(self):
         from core.xhs_downloader import extract_video_url
-        video = {"media": {"stream": {"h264": [{"masterUrl": "https://cdn.example.com/v.mp4"}]}}}
+
+        video = {
+            "media": {
+                "stream": {"h264": [{"masterUrl": "https://cdn.example.com/v.mp4"}]}
+            }
+        }
         url, reason = extract_video_url(video)
         assert url == "https://cdn.example.com/v.mp4"
         assert reason is None
@@ -237,11 +313,27 @@ class TestExtractVideoUrl:
     def test_prefers_highest_quality_stream(self):
         # h264 列表通常含多档画质（qualityType），应选最高档而非第一项
         from core.xhs_downloader import extract_video_url
-        video = {"media": {"stream": {"h264": [
-            {"qualityType": "LD", "masterUrl": "https://cdn.example.com/ld.mp4"},
-            {"qualityType": "HD", "masterUrl": "https://cdn.example.com/hd.mp4"},
-            {"qualityType": "SD", "masterUrl": "https://cdn.example.com/sd.mp4"},
-        ]}}}
+
+        video = {
+            "media": {
+                "stream": {
+                    "h264": [
+                        {
+                            "qualityType": "LD",
+                            "masterUrl": "https://cdn.example.com/ld.mp4",
+                        },
+                        {
+                            "qualityType": "HD",
+                            "masterUrl": "https://cdn.example.com/hd.mp4",
+                        },
+                        {
+                            "qualityType": "SD",
+                            "masterUrl": "https://cdn.example.com/sd.mp4",
+                        },
+                    ]
+                }
+            }
+        }
         url, reason = extract_video_url(video)
         assert url == "https://cdn.example.com/hd.mp4"
         assert reason is None
@@ -249,25 +341,46 @@ class TestExtractVideoUrl:
     def test_quality_tiebreak_by_bitrate(self):
         # qualityType 相同或缺失时按 videoBitrate 选更高码率
         from core.xhs_downloader import extract_video_url
-        video = {"media": {"stream": {"h264": [
-            {"masterUrl": "https://cdn.example.com/low.mp4", "videoBitrate": 800000},
-            {"masterUrl": "https://cdn.example.com/high.mp4", "videoBitrate": 2500000},
-        ]}}}
+
+        video = {
+            "media": {
+                "stream": {
+                    "h264": [
+                        {
+                            "masterUrl": "https://cdn.example.com/low.mp4",
+                            "videoBitrate": 800000,
+                        },
+                        {
+                            "masterUrl": "https://cdn.example.com/high.mp4",
+                            "videoBitrate": 2500000,
+                        },
+                    ]
+                }
+            }
+        }
         url, reason = extract_video_url(video)
         assert url == "https://cdn.example.com/high.mp4"
 
     def test_no_signals_falls_back_to_first(self):
         # 无任何画质信号时保持原行为：取第一项
         from core.xhs_downloader import extract_video_url
-        video = {"media": {"stream": {"h264": [
-            {"masterUrl": "https://cdn.example.com/a.mp4"},
-            {"masterUrl": "https://cdn.example.com/b.mp4"},
-        ]}}}
+
+        video = {
+            "media": {
+                "stream": {
+                    "h264": [
+                        {"masterUrl": "https://cdn.example.com/a.mp4"},
+                        {"masterUrl": "https://cdn.example.com/b.mp4"},
+                    ]
+                }
+            }
+        }
         url, reason = extract_video_url(video)
         assert url == "https://cdn.example.com/a.mp4"
 
     def test_h264_list_missing_master_url(self):
         from core.xhs_downloader import extract_video_url
+
         video = {"media": {"stream": {"h264": [{"backupUrls": ["x"]}]}}}
         url, reason = extract_video_url(video)
         assert url is None
@@ -276,13 +389,18 @@ class TestExtractVideoUrl:
     def test_h264_first_element_none(self):
         # h264 列表首元素为 None 时不崩溃，走兜底
         from core.xhs_downloader import extract_video_url
-        video = {"media": {"stream": {"h264": [None]}}, "url": "https://cdn.example.com/fallback.mp4"}
+
+        video = {
+            "media": {"stream": {"h264": [None]}},
+            "url": "https://cdn.example.com/fallback.mp4",
+        }
         url, reason = extract_video_url(video)
         assert url is None
         assert reason == "h264 流存在但缺少 masterUrl"
 
     def test_fallback_to_top_level_url(self):
         from core.xhs_downloader import extract_video_url
+
         video = {"url": "https://cdn.example.com/direct.mp4"}
         url, reason = extract_video_url(video)
         assert url == "https://cdn.example.com/direct.mp4"
@@ -290,12 +408,14 @@ class TestExtractVideoUrl:
 
     def test_no_stream_no_url_returns_reason(self):
         from core.xhs_downloader import extract_video_url
+
         url, reason = extract_video_url({})
         assert url is None
         assert reason == "无 stream/h264 也无顶层 url"
 
     def test_none_video_returns_reason(self):
         from core.xhs_downloader import extract_video_url
+
         url, reason = extract_video_url(None)
         assert url is None
         assert reason == "无 stream/h264 也无顶层 url"
@@ -303,15 +423,23 @@ class TestExtractVideoUrl:
     def test_empty_h264_list_falls_back_to_url(self):
         # h264 为空列表时不进 h264 分支，走顶层 url 兜底
         from core.xhs_downloader import extract_video_url
-        video = {"media": {"stream": {"h264": []}}, "url": "https://cdn.example.com/fallback.mp4"}
+
+        video = {
+            "media": {"stream": {"h264": []}},
+            "url": "https://cdn.example.com/fallback.mp4",
+        }
         url, reason = extract_video_url(video)
         assert url == "https://cdn.example.com/fallback.mp4"
         assert reason is None
 
     def test_h264_not_list_falls_back_to_url(self):
-    # h264 不是 list（如误传 dict）时不进 h264 分支
+        # h264 不是 list（如误传 dict）时不进 h264 分支
         from core.xhs_downloader import extract_video_url
-        video = {"media": {"stream": {"h264": "not-a-list"}}, "url": "https://cdn.example.com/fallback.mp4"}
+
+        video = {
+            "media": {"stream": {"h264": "not-a-list"}},
+            "url": "https://cdn.example.com/fallback.mp4",
+        }
         url, reason = extract_video_url(video)
         assert url == "https://cdn.example.com/fallback.mp4"
         assert reason is None
@@ -319,22 +447,35 @@ class TestExtractVideoUrl:
 
 # ---------------- resolve_xhs_basename ----------------
 
+
 class TestResolveXhsBasename:
     """无标题笔记的目录基名：title → desc → tags → xhs。"""
 
     def test_title_priority(self):
         from core.xhs_downloader import resolve_xhs_basename
-        note = {"title": "正常标题", "desc": "有desc", "tagList": [{"name": "tag"}], "noteId": "id"}
+
+        note = {
+            "title": "正常标题",
+            "desc": "有desc",
+            "tagList": [{"name": "tag"}],
+            "noteId": "id",
+        }
         assert resolve_xhs_basename(note) == "正常标题"
 
     def test_desc_fallback(self):
         from core.xhs_downloader import resolve_xhs_basename
-        note = {"title": "", "desc": "这是一段描述文字，很长很长，会被裁剪到 30 字符之内使用", "noteId": "id"}
+
+        note = {
+            "title": "",
+            "desc": "这是一段描述文字，很长很长，会被裁剪到 30 字符之内使用",
+            "noteId": "id",
+        }
         out = resolve_xhs_basename(note)
         assert "描述文字" in out
 
     def test_tag_only(self):
         from core.xhs_downloader import resolve_xhs_basename
+
         note = {
             "title": "",
             "desc": "",
@@ -349,19 +490,33 @@ class TestResolveXhsBasename:
 
     def test_all_empty_falls_to_xhs(self):
         from core.xhs_downloader import resolve_xhs_basename
-        assert resolve_xhs_basename({"title": "", "desc": "", "tagList": [], "noteId": "id"}) == "xhs"
-        assert resolve_xhs_basename({"title": "  ", "desc": None, "noteId": "id"}) == "xhs"
+
+        assert (
+            resolve_xhs_basename(
+                {"title": "", "desc": "", "tagList": [], "noteId": "id"}
+            )
+            == "xhs"
+        )
+        assert (
+            resolve_xhs_basename({"title": "  ", "desc": None, "noteId": "id"}) == "xhs"
+        )
         assert resolve_xhs_basename({"title": "/", "desc": "", "noteId": "id"}) == "xhs"
 
     def test_desc_topic_marker_stripped(self):
         # desc 里嵌的 "#话题[话题]#" 标记要清洗
         from core.xhs_downloader import resolve_xhs_basename
-        note = {"title": "", "desc": "周末出游 #海边[话题]# #日落[话题]#", "noteId": "id"}
+
+        note = {
+            "title": "",
+            "desc": "周末出游 #海边[话题]# #日落[话题]#",
+            "noteId": "id",
+        }
         out = resolve_xhs_basename(note)
         assert "[话题]" not in out
 
 
 # ---------------- 标题兜底逻辑 ----------------
+
 
 class TestTitleFallback:
     """标题为空/None/纯特殊字符时应回退 xhs_<noteId>，而非 untitled。
@@ -369,6 +524,7 @@ class TestTitleFallback:
 
     def _safe_title(self, title, note_id="abc123"):
         from core.utils import sanitize_filename
+
         return sanitize_filename(title, default="") or f"xhs_{note_id}"
 
     def test_slash_title_falls_back(self):
@@ -425,6 +581,7 @@ class TestDetectRiskControlQueryKeyFalsePositive:
 
 # ---------------- detect_missing_xsec_token ----------------
 
+
 class TestDetectMissingXsecToken:
     """error_code=300031 专属判定：2026-10 起小红书对无 xsec_token 的裸
     /explore/<id> 链接风控落地到 /404 页（"当前笔记暂时无法浏览"）。
@@ -434,12 +591,16 @@ class TestDetectMissingXsecToken:
 
     def test_error_code_300031_in_final_url(self):
         from core.xhs_downloader import detect_missing_xsec_token
-        url = ("https://www.xiaohongshu.com/404?source=/404/sec_abc"
-               "&error_code=300031&error_msg=xxx")
+
+        url = (
+            "https://www.xiaohongshu.com/404?source=/404/sec_abc"
+            "&error_code=300031&error_msg=xxx"
+        )
         assert detect_missing_xsec_token("<html>x</html>", url) is True
 
     def test_error_msg_marker_in_html(self):
         from core.xhs_downloader import detect_missing_xsec_token
+
         html = "<html>当前笔记暂时无法浏览</html>"
         url = "https://www.xiaohongshu.com/explore/abc"
         assert detect_missing_xsec_token(html, url) is True
@@ -447,16 +608,19 @@ class TestDetectMissingXsecToken:
     def test_deleted_note_code_not_matched(self):
         # 真被删(-510001) 走 detect_note_not_found，不是缺 token
         from core.xhs_downloader import detect_missing_xsec_token
+
         url = "https://www.xiaohongshu.com/404?errorCode=-510001"
         assert detect_missing_xsec_token("<html>正常页</html>", url) is False
 
     def test_normal_page_returns_false(self):
         from core.xhs_downloader import detect_missing_xsec_token
+
         html = "<html><title>我的笔记 - 小红书</title></html>"
         url = "https://www.xiaohongshu.com/explore/abc?xsec_token=ABWU"
         assert detect_missing_xsec_token(html, url) is False
 
     def test_empty_inputs_returns_false(self):
         from core.xhs_downloader import detect_missing_xsec_token
+
         assert detect_missing_xsec_token("", "") is False
         assert detect_missing_xsec_token(None, None) is False

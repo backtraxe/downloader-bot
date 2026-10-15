@@ -1,37 +1,41 @@
 # -*- coding: utf-8 -*-
 """sites.py 站点识别单元测试"""
+
 import pytest
 
 from core.sites import SITE_REQUIRE_COOKIE, cookie_file_for, get_site_name
 
 
 class TestGetSiteName:
-    @pytest.mark.parametrize("url,expected", [
-        # xiaohongshu
-        ("https://www.xiaohongshu.com/explore/abc", "xiaohongshu"),
-        ("https://www.xiaohongshu.com/discovery/item/abc", "xiaohongshu"),
-        ("https://xhslink.com/abc", "xiaohongshu"),
-        ("https://xhslink.cn/abc", "xiaohongshu"),
-        # 小红书 App 分享文本常见形式（短链 .cn）
-        ("http://xhslink.cn/o/3V9olrzZIZU", "xiaohongshu"),
-        # bilibili
-        ("https://www.bilibili.com/video/BV1xx", "bilibili"),
-        ("https://b23.tv/abc", "bilibili"),
-        # douyin
-        ("https://www.douyin.com/video/123", "douyin"),
-        ("https://v.douyin.com/abc/", "douyin"),
-        # youtube
-        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "youtube"),
-        ("https://youtu.be/dQw4w9WgXcQ", "youtube"),
-        ("https://m.youtube.com/watch?v=abc", "youtube"),
-        # instagram
-        ("https://www.instagram.com/p/Cabc/", "instagram"),
-        ("https://instagram.com/reel/abc", "instagram"),
-        # twitter / x
-        ("https://x.com/user/status/123", "twitter"),
-        ("https://twitter.com/user/status/123", "twitter"),
-        ("https://t.co/abc", "twitter"),
-    ])
+    @pytest.mark.parametrize(
+        "url,expected",
+        [
+            # xiaohongshu
+            ("https://www.xiaohongshu.com/explore/abc", "xiaohongshu"),
+            ("https://www.xiaohongshu.com/discovery/item/abc", "xiaohongshu"),
+            ("https://xhslink.com/abc", "xiaohongshu"),
+            ("https://xhslink.cn/abc", "xiaohongshu"),
+            # 小红书 App 分享文本常见形式（短链 .cn）
+            ("http://xhslink.cn/o/3V9olrzZIZU", "xiaohongshu"),
+            # bilibili
+            ("https://www.bilibili.com/video/BV1xx", "bilibili"),
+            ("https://b23.tv/abc", "bilibili"),
+            # douyin
+            ("https://www.douyin.com/video/123", "douyin"),
+            ("https://v.douyin.com/abc/", "douyin"),
+            # youtube
+            ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "youtube"),
+            ("https://youtu.be/dQw4w9WgXcQ", "youtube"),
+            ("https://m.youtube.com/watch?v=abc", "youtube"),
+            # instagram
+            ("https://www.instagram.com/p/Cabc/", "instagram"),
+            ("https://instagram.com/reel/abc", "instagram"),
+            # twitter / x
+            ("https://x.com/user/status/123", "twitter"),
+            ("https://twitter.com/user/status/123", "twitter"),
+            ("https://t.co/abc", "twitter"),
+        ],
+    )
     def test_known_sites(self, url, expected):
         assert get_site_name(url) == expected
 
@@ -47,7 +51,14 @@ class TestGetSiteName:
 
     def test_all_target_sites_have_cookie_config(self):
         """5 个新增站点 + xhs 都应有 cookie 策略说明"""
-        for site in ["youtube", "bilibili", "douyin", "instagram", "twitter", "xiaohongshu"]:
+        for site in [
+            "youtube",
+            "bilibili",
+            "douyin",
+            "instagram",
+            "twitter",
+            "xiaohongshu",
+        ]:
             assert site in SITE_REQUIRE_COOKIE, f"{site} 缺少 cookie 策略配置"
 
 
