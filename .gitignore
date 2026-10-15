@@ -6,6 +6,7 @@ download/
 # 敏感凭据
 cookies/
 telegram.json
+config.json
 
 # Python
 __pycache__/

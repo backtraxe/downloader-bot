@@ -9,11 +9,11 @@
 - 下载核心零改动：靠下载前后 `download/` 快照比对拿产物，从
   `download/<站点>[/<作者>]/<标题>/` 路径结构反推元数据打标签
 - 长轮询走 http_client（Termux 系统 curl 降级同样可用），零新增依赖
-- 白名单（telegram.json 的 allowed_users）：未授权用户只收到含其
+- 白名单（config.json 的 telegram.allowed_users）：未授权用户只收到含其
   用户 id 的提示，不消耗下载
 - 串行处理：一次一条链接，多余消息在 Telegram 服务端排队
 
-配置（telegram.json，gitignore，首跑 tg_upload.py / 本脚本生成模板）：
+配置（config.json 的 telegram 段，已 gitignore，首跑 tg_upload.py / 本脚本生成模板）：
   bot_token     @BotFather 给的 token
   chat_id       tg_upload 直发模式默认聊天；bot 模式按消息来源回复
   allowed_users 允许使用的用户 id 列表
@@ -213,8 +213,8 @@ def main():
     setup_logging()
     cfg = load_config()
     if cfg is None:
-        print("请先在 telegram.json 填入 bot_token / chat_id / allowed_users"
-              "（@BotFather 拿 token；用户 id 会在首次私聊被拒时回显）",
+        print("请先在 config.json 的 telegram 段填入 bot_token / chat_id /"
+              " allowed_users（@BotFather 拿 token；用户 id 会在首次私聊被拒时回显）",
               file=sys.stderr)
         return 1
 

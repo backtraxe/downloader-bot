@@ -77,7 +77,7 @@ python live_photo.py "download/xiaohongshu/<作者>/<标题>_<noteId>"
 
 - `download/` — 下载输出目录（已 gitignore）
 - `cookies/` — 各站点 Cookie 文件，命名规则为 `cookies/<站点名>.txt`（已 gitignore）
-- `telegram.json` — Telegram 配置（已 gitignore，见"上传到 Telegram"节；不用该功能无需关心）
+- `config.json` — 统一配置文件（已 gitignore）：telegram 段配置 Telegram 功能；不用则无需关心
 
 ## 获取 Cookie
 
@@ -198,7 +198,7 @@ python cookie_login.py xiaohongshu --headed   # 遇滑块/人机校验时弹窗�
 
 ## 上传到 Telegram（可选）
 
-**两种使用形态**：不配置 `telegram.json` 时，仓库就是纯本地命令行下载器；配置后即可用下面两个 Telegram 工具（共用同一份配置，已 gitignore）。代码也按此分层：下载核心在 `core/`，Telegram 功能在 `telegram/`（仅依赖 core，单向），根目录 `downloader.py` / `tg_bot.py` 等脚本是兼容入口 shim。
+**两种使用形态**：不把 Telegram 配置（config.json 的 telegram 段）填上时，仓库就是纯本地命令行下载器；配置后即可用下面两个 Telegram 工具（共用 config.json 的 telegram 段，已 gitignore）。代码也按此分层：下载核心在 `core/`，Telegram 功能在 `telegram/`（仅依赖 core，单向），根目录 `downloader.py` / `tg_bot.py` 等脚本是兼容入口 shim。
 
 - **`tg_bot.py` — 聊天闭环机器人（Termux 常驻）**：给 bot 发链接（可带分享文案），自动下载并把产物回传到聊天——图片按 10 张/组发相册，视频发 video，HEIC/原图走文件；caption 自动带 **`#作者` `#站点`** 标签（Telegram 原生可点击、可搜索，方便按作者翻记录）。重复链接提示"已下载过"，超限文件提示跳过。`allowed_users` 白名单外的用户不会消耗你的下载（被拒时会回显其用户 id，方便加白）
 - **`tg_upload.py` — 命令行直发**：把本地已有目录/文件传上去（`--document` 原图不压缩，`--caption` 自定义说明，`--config` 指定配置）
@@ -207,10 +207,12 @@ python cookie_login.py xiaohongshu --headed   # 遇滑块/人机校验时弹窗�
 
 1. Telegram 找 **@BotFather** → `/newbot` 拿 bot token
 2. 给 bot 发任意一条消息，浏览器打开 `https://api.telegram.org/bot<token>/getUpdates` 取你的用户 id（`message.from.id`）
-3. 首跑任一脚本自动生成 `telegram.json` 模板，填入：
+3. 首跑任一脚本自动生成 `config.json` 模板，在 telegram 段填入：
    - `bot_token`：上面拿到的 token
    - `chat_id`：直发模式默认聊天（私聊你的用户 id，或频道 `@名字`）
    - `allowed_users`：允许用 bot 的用户 id 列表（一般就你自己）
+
+   旧版 telegram.json 会被自动识别兜底读取，老用户无需手动迁移。
 
 ```bash
 tmux new -s tg      # 常驻推荐

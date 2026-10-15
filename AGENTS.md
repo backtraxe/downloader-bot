@@ -6,7 +6,7 @@
 
 README 是本仓库的权威使用文档（中文，与当前代码一致）。历史上曾有的旧 Telegram bot（`main.py`、`config.py`、`src/`）早已删除；现在的 `telegram/` 目录是后来重新实现的另一套，不要按旧架构理解本仓库。
 
-仓库没有 `pyproject.toml` / `setup.py`，不是可安装的包——代码分两个 sys.path 包：`core/`（下载核心）与 `telegram/`（机器人功能，仅依赖 core，单向）。边界纪律：core 绝不 import telegram（`tests/test_module_boundary.py` 固化）；telegram 对 core 的契约只有 `dispatch_url` / `http_client` / `utils`。根目录 `downloader.py`、`xhs_downloader.py`、`tg_bot.py` 等让用户命令保持不变的文件全部是 5 行兼容 shim——**改功能去 core/ 或 telegram/ 改，别改 shim**。**脚本和测试都必须在项目根目录运行**（`cookies/`、`download/`、`telegram.json` 均为 CWD 相对路径）。
+仓库没有 `pyproject.toml` / `setup.py`，不是可安装的包——代码分两个 sys.path 包：`core/`（下载核心）与 `telegram/`（机器人功能，仅依赖 core，单向）。边界纪律：core 绝不 import telegram（`tests/test_module_boundary.py` 固化）；telegram 对 core 的契约只有 `dispatch_url` / `http_client` / `utils`。根目录 `downloader.py`、`xhs_downloader.py`、`tg_bot.py` 等让用户命令保持不变的文件全部是 5 行兼容 shim——**改功能去 core/ 或 telegram/ 改，别改 shim**。**脚本和测试都必须在项目根目录运行**（`cookies/`、`download/`、`config.json` 均为 CWD 相对路径）。
 
 ## 项目结构
 
@@ -22,12 +22,13 @@ core/
   http_client.py       # HTTP 统一封装：curl_cffi 优先，不可用时降级系统 curl 命令
   sites.py             # URL→站点名映射、Cookie 文件加载（新增站点识别只改这里）
   utils.py             # 日志、文件名清洗、目录构造、UA 初始化、cookie 转换等共用函数
+  config.py          # 统一配置 config.json 加载（telegram 段供 tg 层；向后兼容旧 telegram.json）
   cookie_import.py     # stdin 吃任意格式 Cookie（JSON/Cookie头/Netscape）按站点写 cookies/<站点>.txt
   cookie_login.py      # Playwright 半自动登录刷新 cookies/<站点>.txt（可选依赖）
   live_photo.py        # 实况照片后处理（独立 CLI，不被任何下载模块 import）
 telegram/
   bot.py               # Telegram 机器人（长轮询常驻）：聊天发链接→dispatch_url 下载→产物回传，caption 打 #作者 #站点 标签
-  upload.py            # Telegram 直发（Bot API）：目录→10 张/组相册，HEIC/大图走 document；load_config 是 tg 层唯一配置入口
+  upload.py            # Telegram 直发（Bot API）：目录→10 张/组相册，HEIC/大图走 document；读 config.json 的 telegram 段
 根目录 downloader.py / xhs_downloader.py / douyin_downloader.py / 1024_downloader.py /
 live_photo.py / cookie_import.py / cookie_login.py / tg_bot.py / tg_upload.py = 兼容入口 shim
 conftest.py            # 让裸 pytest 也能从仓库根导入两个包
@@ -36,6 +37,7 @@ tests/                 # pytest 单元测试（不联网），文件名与模块
 requirements.txt       # 依赖清单（requests / fake_useragent / beautifulsoup4 / curl_cffi / yt-dlp）
 cookies/               # 各站点 cookie 文件，cookies/<站点名>.txt（已 gitignore）
 download/              # 输出目录，download/<站点>[/<作者>]/<标题>[_<ID>]/ 或 <标题>.<ext>（已 gitignore）
+config.json            # 仓库统一配置（已 gitignore）；旧版 telegram.json 仍可被兜底读取
 .nomedia               # 阻止 Android 媒体扫描索引仓库目录（含 download/ 产物，Termux 场景）
 ```
 
@@ -69,7 +71,7 @@ python downloader.py                                 # 统一入口，按 URL �
 
 **抖音签名 detail API（2026-10-14 打通）。** `aweme/v1/web/aweme/detail/` 由 Argus 风控插件把守：缺签名一律 403 "Blocked by ArgusSecurityPlugin Uifid Not Found"（Cookie 完整也一样拦，yt-dlp 的 DouyinIE 即因此整拦、报误导性 "Fresh cookies needed"👉由 `diagnose_error` 归为 `blocked` 兜底提示）。页面侧无活路：视频页 pace_f 数据里 `"aweme": null`——视频详情不内嵌（笔记页内嵌，故图文走 HTML、视频只能走 API）；iesdouyin legacy 空响应、share 页纯壳、蜘蛛 UA 被 JS 墙拦。解法：**三件套纯本地签名**（算法移植自 Evil0ctal/Douyin_TikTok_Download_API，Apache-2.0，`douyin_abogus.py`/`douyin_sm3.py`/`douyin_websign.py` 头注有溯源）：a_bogus（bdms.js v1.0.1.19 逆向，SM3+RC4 变体）+ 伪 msToken（126 位随机串，服务端不校验）+ x-secsdk-web-signature（`md5(uifid_timestamp_盐_query)`，盐随 SDK 版本，**这是 "Uifid Not Found" 的对应物**）。签名素材就是 Cookie 里的 `UIFID`/`UIFID_TEMP`（websign 用它，**任意非空值即可**，服务端不校验内容）——但 2026-10-14 对照矩阵实测：仅 UIFID 仍返回 `200 空`，真正门禁是 **UIFID 签名 + 有效 ttwid 或 sessionid 至少其一**（`ttwid`/`sessionid` 的值会被校验，过期即 200 空；`s_v_web_id` 只随 query 的 verifyFp/fp 携带，服务端不校验，缺了也没事；ttwid 访客短期会过期，是"旧 Cookie 突然全 200 空"的常见原因；纯 HTTP 自助换 ttwid 需过 `__ac_signature` 挑战，未实现——刷新 Cookie 是正路）。封装在 `build_signed_detail_url`（拼接顺序与编码语义是命门：a_bogus 层 urlencode 编码后签，websign 先解码再按 JS URLSearchParams 语义整体重编码，签发的字节与发送的字节必须一致）；`fetch_aweme_detail` 重试瞬时错误与 2xx 非 JSON（`_NonJsonResponse`，日志带响应头部+指向刷 Cookie 的精确提示）、Argus 403 确定性拒绝不重试。底层风控若改版（盐/SDK 版本更新），三件套会整体失效，需对 Evil0ctal 上游重新同步。另注意：短间隔高频请求会把整个 douyin.com 的 HTML 链路打成 jsvm 挑战页（API 链路独立不受影响，故笔记页拦时自动改走 API 兜底），冷却后恢复。
 
-**`telegram/bot.py`（Telegram 机器人）。** 长轮询 `getUpdates`（走 http_client，Termux 降级路径可用），**下载核心零改动**：`dispatch_url` 调用前后对 `download/` 做快照比对（`snapshot_tree`/`group_new_files`）拿本批产物，按 `download/<站点>[/<作者>]/<标题>` 深度反推 site/author/title（作者层存在与否 = 目录深度），caption 经 `make_tag` 压成 `#作者 #站点` 单 token（Telegram 原生可搜）。白名单 `telegram.json.allowed_users` 为空则全拒（防白嫖，被拒消息回显用户 id 便于加白）。重复链接靠"快照无新文件"识别（下载器幂等跳过不落新盘）。串行处理、防重启重放（`initial_offset` 跳过离线积压）。上传复用 `telegram/upload.py` 的 `upload()`（`chat_id` 按消息来源覆盖配置默认）。**telegram/upload.py 与 telegram/bot.py 共用同一份 telegram.json。**
+**`telegram/bot.py`（Telegram 机器人）。** 长轮询 `getUpdates`（走 http_client，Termux 降级路径可用），**下载核心零改动**：`dispatch_url` 调用前后对 `download/` 做快照比对（`snapshot_tree`/`group_new_files`）拿本批产物，按 `download/<站点>[/<作者>]/<标题>` 深度反推 site/author/title（作者层存在与否 = 目录深度），caption 经 `make_tag` 压成 `#作者 #站点` 单 token（Telegram 原生可搜）。白名单 `config.json` 的 `telegram.allowed_users` 为空则全拒（防白嫖，被拒消息回显用户 id 便于加白）。重复链接靠"快照无新文件"识别（下载器幂等跳过不落新盘）。串行处理、防重启重放（`initial_offset` 跳过离线积压）。上传复用 `telegram/upload.py` 的 `upload()`（`chat_id` 按消息来源覆盖配置默认）。**telegram/upload.py 与 telegram/bot.py 共用 config.json 的 telegram 段。**
 
 **`core/sites.py`（共用）。** `get_site_name(url)` 把域名归一为小写站点名：twitter 含 `x.com`/`t.co`，xiaohongshu 含 `xiaohongshu.com`/`xhslink.com`/`xhslink.cn`；未知域名取最后两段（`www.example.com` → `example.com`），无点/IP 用完整 host。`SITE_REQUIRE_COOKIE` 记录各站点 cookie 建议级别。`load_cookie_for_url` 按 `cookies/<site>.txt` 加载：文件不存在时自动创建空文件并提示，内容为空返回 None。**新增站点识别只改这一处**，保证 core/downloader.py 与 core/xhs_downloader.py 口径一致。
 

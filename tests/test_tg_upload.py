@@ -5,6 +5,7 @@ import os
 
 import pytest
 
+from core.config import _TEMPLATE
 from telegram.upload import (
     TgError,
     call_api,
@@ -55,21 +56,27 @@ _CFG = {"bot_token": "123:abc", "chat_id": 42}
 
 class TestLoadConfig:
     def test_missing_writes_template_and_returns_none(self, tmp_path):
-        cfg_path = tmp_path / "telegram.json"
-        assert load_config(str(cfg_path)) is None
+        cfg_path = tmp_path / "config.json"
+        assert load_config(str(cfg_path), str(tmp_path / "telegram.json")) is None
         template = json.loads(cfg_path.read_text())
-        assert "bot_token" in template and "chat_id" in template
+        assert "telegram" in template
+        assert "bot_token" in template["telegram"]
 
     def test_placeholder_token_returns_none(self, tmp_path):
-        cfg_path = tmp_path / "telegram.json"
-        cfg_path.write_text(json.dumps({"bot_token": "在此填入 @BotFather 给的 token",
-                                        "chat_id": 1}))
-        assert load_config(str(cfg_path)) is None
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(json.dumps(_TEMPLATE, ensure_ascii=False))
+        assert load_config(str(cfg_path), str(tmp_path / "telegram.json")) is None
 
     def test_valid_config(self, tmp_path):
-        cfg_path = tmp_path / "telegram.json"
-        cfg_path.write_text(json.dumps(_CFG, ensure_ascii=False))
-        assert load_config(str(cfg_path)) == _CFG
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(json.dumps({"telegram": _CFG}, ensure_ascii=False))
+        assert load_config(str(cfg_path), str(tmp_path / "telegram.json")) == _CFG
+
+    def test_legacy_telegram_json_fallback(self, tmp_path):
+        legacy = tmp_path / "telegram.json"
+        legacy.write_text(json.dumps(_CFG, ensure_ascii=False))
+        # config.json 不存在时，旧版扁平结构 telegram.json 兜底视作 telegram 段
+        assert load_config(str(tmp_path / "config.json"), str(legacy)) == _CFG
 
 
 # ---------------- collect_media / plan_uploads ----------------

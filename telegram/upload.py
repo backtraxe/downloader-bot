@@ -6,7 +6,7 @@
   2. 给 bot 发任意一条消息，浏览器打开
      https://api.telegram.org/bot<token>/getUpdates 取 chat.id
      （发频道/群：把 bot 加进去，chat_id 用 @频道名 或群组 id）
-  3. 填入 telegram.json（首跑自动生成模板与上述指引，已 gitignore）
+  3. 填入 config.json 的 telegram 段（首跑自动生成模板与上述指引，已 gitignore）
 
 用法：
     python tg_upload.py <文件或目录>            # 目录：图片按 10 张/组发相册
@@ -23,12 +23,12 @@ import os
 import sys
 import time
 
+from core import config as core_config
 from core import http_client
 from core.utils import setup_logging
 
 logger = logging.getLogger("downloader")
 
-CONFIG_PATH = "telegram.json"
 _API_BASE = "https://api.telegram.org"
 
 # Bot API 上传上限（自建 bot-api server 才是 2GB，官方是 50MB）
@@ -40,12 +40,6 @@ ALBUM_SIZE = 10  # sendMediaGroup 每组上限
 _PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp"}  # heic 只按 document 发
 _VIDEO_EXTS = {".mp4", ".mov", ".webm", ".mkv"}
 
-_CONFIG_TEMPLATE = {
-    "bot_token": "在此填入 @BotFather 给的 token",
-    "chat_id": 0,
-    "allowed_users": [],  # telegram/bot.py 白名单：允许使用的用户 id 列表
-}
-
 
 class TgError(RuntimeError):
     """Bot API 返回 ok:false 或多次重试仍失败。"""
@@ -53,17 +47,23 @@ class TgError(RuntimeError):
 
 # ---------------- 配置与媒体规划（纯函数） ----------------
 
-def load_config(path=CONFIG_PATH):
-    """读 telegram.json；缺失时写模板并返回 None（调用方打印指引退出）。"""
-    if not os.path.exists(path):
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(_CONFIG_TEMPLATE, f, ensure_ascii=False, indent=2)
+def load_config(path=None, legacy_path=None):
+    """读 config.json 的 telegram 段；缺文件/字段未填时写模板并返回 None。
+
+    旧版扁平结构 telegram.json 由 core.config 自动当作 telegram 段兜底读取。
+    """
+    kwargs = {}
+    if path is not None:
+        kwargs["path"] = path
+    if legacy_path is not None:
+        kwargs["legacy_telegram_path"] = legacy_path
+    cfg = core_config.load_config(**kwargs)
+    if cfg is None:
         return None
-    with open(path, encoding="utf-8") as f:
-        cfg = json.load(f)
-    if not cfg.get("bot_token") or str(cfg.get("bot_token")).startswith("在此"):
+    tg = cfg.get("telegram") or {}
+    if not tg.get("bot_token") or str(tg.get("bot_token")).startswith("在此"):
         return None
-    return cfg
+    return tg
 
 
 def collect_media(target):
@@ -200,13 +200,14 @@ def main():
     parser.add_argument("--document", action="store_true",
                         help="全部按文件发送（原图不被压缩）")
     parser.add_argument("--caption", default=None, help="说明文字")
-    parser.add_argument("--config", default=CONFIG_PATH, help="配置文件路径")
+    parser.add_argument("--config", default=None,
+                        help="配置文件路径（默认 config.json）")
     args = parser.parse_args()
 
     setup_logging()
     cfg = load_config(args.config)
     if cfg is None:
-        print(f"请先在 {args.config} 填入 bot_token 与 chat_id：\n"
+        print(f"请先在 {args.config or core_config.CONFIG_PATH} 的 telegram 段填入 bot_token 与 chat_id：\n"
               "  1. 找 @BotFather /newbot 拿 token\n"
               "  2. 给 bot 发一条消息，打开 "
               "https://api.telegram.org/bot<token>/getUpdates 取 chat.id\n"
