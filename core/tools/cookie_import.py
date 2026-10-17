@@ -71,6 +71,49 @@ def _strip_cookie_label(header):
     return t
 
 
+def find_empty_cookie_values(text):
+    """检测任意格式 cookie 文本中值为空的条目，返回 name 列表。
+
+    导入时向用户预警用——空值 cookie 多为复制不完整或失效导出，登录态
+    往往缺关键项（对齐 gallery-dl v1.32.16 "check for empty cookie
+    values"）。三种输入格式（json / netscape / header）各按其结构判定。
+    """
+    t = (text or "").strip()
+    if not t:
+        return []
+    empty = []
+    fmt = detect_format(t)
+    if fmt == "json":
+        try:
+            cookies = _parse_json_cookies(t)
+        except ValueError:
+            cookies = []
+        for c in cookies:
+            name = str(c.get("name") or "").strip() if isinstance(c, dict) else ""
+            value = c.get("value") if isinstance(c, dict) else ""
+            if name and (value is None or str(value).strip() == ""):
+                empty.append(name)
+    elif fmt == "netscape":
+        for line in t.splitlines():
+            parts = line.split("\t")
+            # name 在第 6 列、value 在第 7 列；value 为空即空值条目。
+            # 末行尾部 Tab 可能被上游的 .strip() 吃掉只剩 6 列——
+            # "有 name 无 value 列"同样按空值计（Netscape 标准是 7 列）
+            if len(parts) >= 6 and parts[5].strip() and (
+                len(parts) < 7 or not parts[6].strip()
+            ):
+                empty.append(parts[5].strip())
+    else:
+        header = _strip_cookie_label(t)
+        for seg in header.split(";"):
+            if "=" not in seg:
+                continue
+            name, _, value = seg.partition("=")
+            if name.strip() and not value.strip():
+                empty.append(name.strip())
+    return list(dict.fromkeys(empty))  # 去重保序
+
+
 def convert_to_site_format(text, site):
     """把任意格式的 cookie 文本转换成本站点 cookies 文件应有的内容。
 
@@ -123,6 +166,13 @@ def main():
         f"已写入 {path}（识别格式：{detect_format(text)}，"
         f"输出格式：{_SITES[args.site]['format']}）"
     )
+    empty_names = find_empty_cookie_values(text)
+    if empty_names:
+        print(
+            f"⚠️ 检测到 {len(empty_names)} 个空值 cookie：{'、'.join(empty_names)}——"
+            "登录态可能不完整，建议在浏览器里重新完整复制后再导入",
+            file=sys.stderr,
+        )
     print("可直接开始下载；cookies/ 已在 .gitignore 中，请勿提交。")
     return 0
 

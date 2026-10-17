@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """cookie_import.py 格式识别与转换的纯函数测试"""
 
+import json
+
 import pytest
 
 from core.tools.cookie_import import convert_to_site_format, detect_format
@@ -96,3 +98,48 @@ class TestConvertErrors:
     def test_empty_input_raises(self):
         with pytest.raises(ValueError):
             convert_to_site_format("", "douyin")
+
+
+class TestFindEmptyCookieValues:
+    """空值 cookie 检测：导入时警告用户登录态可能不完整
+    （对齐 gallery-dl v1.32.16 "check for empty cookie values" 思路）。"""
+
+    def test_header_input_empty_value_detected(self):
+        from core.tools.cookie_import import find_empty_cookie_values
+
+        # 请求头形式：b 的值为空
+        text = "Cookie: a=1; b=; c=3"
+        assert find_empty_cookie_values(text) == ["b"]
+
+    def test_json_input_empty_value_detected(self):
+        from core.tools.cookie_import import find_empty_cookie_values
+
+        # Cookie-Editor 导出：value 空字符串
+        text = json.dumps(
+            [
+                {"name": "ttwid", "value": "x"},
+                {"name": "sessionid", "value": ""},
+                {"name": "UIFID", "value": None},
+            ]
+        )
+        assert find_empty_cookie_values(text) == ["sessionid", "UIFID"]
+
+    def test_netscape_input_empty_value_detected(self):
+        from core.tools.cookie_import import find_empty_cookie_values
+
+        # Netscape 7 列：最后一列 value 为空
+        text = (
+            ".douyin.com\tTRUE\t/\tTRUE\t0\tttwid\tabc\n"
+            ".douyin.com\tTRUE\t/\tTRUE\t0\tsessionid\t\n"
+        )
+        assert find_empty_cookie_values(text) == ["sessionid"]
+
+    def test_no_empty_values(self):
+        from core.tools.cookie_import import find_empty_cookie_values
+
+        assert find_empty_cookie_values("a=1; b=2; c=3") == []
+
+    def test_empty_text(self):
+        from core.tools.cookie_import import find_empty_cookie_values
+
+        assert find_empty_cookie_values("") == []
