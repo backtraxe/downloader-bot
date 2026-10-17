@@ -670,6 +670,92 @@ class TestBuildSignedDetailUrl:
         assert extra_headers == {}
 
 
+class TestMsTokenCookiePreferred:
+    """msToken 生成策略对齐 Evil0ctal v5：Cookie 里现成的 msToken 优先用，
+    缺失/为空才退回伪 126 随机串——平台"对多数端点收下伪 token、对部分
+    端点会拒"，现值最稳；detail 端点对伪串不校验，故兜底仍可用。"""
+
+    _AWEME_ID = "7556303777536740671"
+
+    @staticmethod
+    def _ms_token_of(url):
+        from urllib.parse import parse_qs, urlsplit
+
+        return parse_qs(urlsplit(url).query)["msToken"][0]
+
+    @staticmethod
+    def _assert_false_token_shape(token):
+        import core.douyin_downloader as dd
+
+        # 兜底伪串：126 位 _MS_TOKEN_ALPHABET 字符 + "==" 后缀
+        assert len(token) == 128
+        assert token.endswith("==")
+        assert set(token[:-2]) <= set(dd._MS_TOKEN_ALPHABET)
+
+    def test_existing_ms_token_helper_contract(self):
+        from core.douyin_downloader import _existing_ms_token
+
+        assert _existing_ms_token({"msToken": "ABC"}) == "ABC"
+        # 空值视为无现值：返回 None 交由伪串兜底
+        assert _existing_ms_token({"msToken": ""}) is None
+        assert _existing_ms_token({}) is None
+        assert _existing_ms_token(None) is None
+
+    def test_cookie_ms_token_wins(self):
+        # Cookie 现值优先：签名 URL 的 msToken 参数取 Cookie 里的原值
+        from core.douyin_downloader import build_signed_detail_url
+
+        cookies = {"UIFID_TEMP": "uid_test_123", "msToken": "ABC123"}
+        url, _ = build_signed_detail_url(self._AWEME_ID, cookies)
+        assert self._ms_token_of(url) == "ABC123"
+
+    def test_empty_cookie_ms_token_falls_back_to_false_token(self):
+        from core.douyin_downloader import build_signed_detail_url
+
+        cookies = {"UIFID_TEMP": "uid_test_123", "msToken": ""}
+        url, _ = build_signed_detail_url(self._AWEME_ID, cookies)
+        self._assert_false_token_shape(self._ms_token_of(url))
+
+    def test_no_cookie_ms_token_keeps_false_token(self):
+        # 无 msToken 时保持现行为：伪串形态不受 cookie 其他键影响
+        from core.douyin_downloader import build_signed_detail_url
+
+        cookies = {"UIFID_TEMP": "uid_test_123", "ttwid": "t1"}
+        url, _ = build_signed_detail_url(self._AWEME_ID, cookies)
+        self._assert_false_token_shape(self._ms_token_of(url))
+
+    def test_header_form_through_fetch_aweme_detail(self):
+        # 真实调用形态端到端：fetch_aweme_detail 收 `Cookie:` 请求头整串，
+        # 经 _cookie_dict 转 jar 后进 build_signed_detail_url——请求头里的
+        # msToken 必须原样进最终签名 URL
+        import core.douyin_downloader as dd
+
+        class _Capture:
+            def __init__(self):
+                self.urls = []
+
+            def get(self, url, **kwargs):
+                self.urls.append(url)
+
+                ok = json.dumps({"status_code": 0, "aweme_detail": {"aweme_id": "1"}})
+
+                class R:
+                    text = ok
+                    status_code = 200
+
+                    def raise_for_status(self):
+                        pass
+
+                return R()
+
+        session = _Capture()
+        cookie = "ttwid=t1; UIFID_TEMP=uid_test_123; msToken=ABC123"
+        assert dd.fetch_aweme_detail(self._AWEME_ID, cookie, session) == {
+            "aweme_id": "1"
+        }
+        assert self._ms_token_of(session.urls[0]) == "ABC123"
+
+
 class TestExtractVideoPlayUrls:
     """视频直链候选：play_addr 无水印优先，过滤 playwm，bit_rate 兜底。"""
 

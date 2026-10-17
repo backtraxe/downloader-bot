@@ -12,7 +12,8 @@ download_url_list/author）。未登录 / Cookie 失效时抖音返回 jsvm 反�
 
 视频（/video/）走签名的 aweme detail API：2026-08/09 起该接口由 Argus
 风控把守，yt-dlp 的 DouyinIE 无签名整拦（报误导性 "Fresh cookies
-needed"），须补齐 a_bogus + 伪 msToken + x-secsdk-web-signature 三件套
+needed"），须补齐 a_bogus + msToken（Cookie 现值优先、伪 126 串兜底，
+对齐 Evil0ctal v5 策略）+ x-secsdk-web-signature 三件套
 （纯本地计算，算法移植自 Evil0ctal/Douyin_TikTok_Download_API，
 Apache-2.0，见 douyin_sign/ 下 douyin_abogus、douyin_websign 头注）。
 页面侧无活路：视频页 pace_f 数据里 aweme: null，详情全靠带签名的 API。
@@ -378,6 +379,17 @@ def _gen_false_ms_token():
     return "".join(random.choice(_MS_TOKEN_ALPHABET) for _ in range(126)) + "=="
 
 
+def _existing_ms_token(cookies):
+    """从 Cookie jar（{name: value} 映射）里取现成的 msToken。
+
+    对齐 Evil0ctal v5 现行策略：身份 Cookie 里带 msToken 就直接用（平台
+    "对多数端点收下伪 token、对部分端点会拒"，现值最稳）。缺失或为空
+    返回 None，由调用方退回伪 126 串兜底（detail 端点对伪串不校验）。
+    """
+    value = (cookies or {}).get("msToken")
+    return value or None
+
+
 def build_signed_detail_url(aweme_id, cookies, user_agent=_UA150):
     """构造带三件套签名的 detail API URL 及附加请求头。
 
@@ -387,7 +399,8 @@ def build_signed_detail_url(aweme_id, cookies, user_agent=_UA150):
     本地计算（算法见 douyin_sign/ 下 douyin_abogus、douyin_websign 头注，移植自
     Evil0ctal/Douyin_TikTok_Download_API，Apache-2.0）：
       a_bogus                —— query 全参的 bdms.js 签名（SM3+RC4 变体）
-      msToken                —— 伪随机串，服务端不校验
+      msToken                —— Cookie 现值优先（Evil0ctal v5 策略），无现值
+                                才退回伪 126 串（detail 端点不校验伪串）
       x-secsdk-web-signature —— md5(uifid_timestamp_盐_query)，这是
                                 "Uifid Not Found" 拦截报文的对应物
     cookies 需含 UIFID(/UIFID_TEMP)——websign 素材，任意非空值即可，
@@ -401,7 +414,9 @@ def build_signed_detail_url(aweme_id, cookies, user_agent=_UA150):
     退化为仅 a_bogus 签名、无附加头（未保护端点仍可用，不伪造 websign）。
     """
     params = dict(
-        _API_BASE_PARAMS, aweme_id=str(aweme_id), msToken=_gen_false_ms_token()
+        _API_BASE_PARAMS,
+        aweme_id=str(aweme_id),
+        msToken=_existing_ms_token(cookies) or _gen_false_ms_token(),
     )
     query = urlencode(params)
     bogus = ABogus(user_agent).get_value(query)
