@@ -36,6 +36,14 @@ class TestDetectNoteNotFound:
         url = "https://www.xiaohongshu.com/explore/abc?ErrorCode=-510001"
         assert detect_note_not_found("<html>x</html>", url) is True
 
+    def test_error_code_510000_in_query(self):
+        # MediaCrawler 错误码口径：-510000 同为笔记不存在（与 -510001 并列识别）
+        url = (
+            "https://www.xiaohongshu.com/explore/abc"
+            "?errorCode=-510000&noteId=6a42799f00000000110172d3"
+        )
+        assert detect_note_not_found("<html>正常页</html>", url) is True
+
     def test_404_title_in_html(self):
         # 信号 3：页面 title 文案命中（URL 不含 /404、不含 errorCode）
         html = "<html><head><title>小红书 - 你访问的页面不见了</title></head></html>"
@@ -75,6 +83,41 @@ class TestDetectRiskControlRegression:
             )
             is True
         )
+
+    def test_status_471_is_risk_control(self):
+        # catbus 实测口径：HTTP 471 = XHS RISK_CONTROL（扫码登录常触发）
+        resp = type(
+            "R",
+            (),
+            {"url": "https://www.xiaohongshu.com/explore/abc", "status_code": 471},
+        )()
+        assert detect_risk_control("<html>正常页</html>", resp) is True
+
+    def test_status_461_is_risk_control(self):
+        # MediaCrawler issue #757：461 同为风控拦截状态码
+        resp = type(
+            "R",
+            (),
+            {"url": "https://www.xiaohongshu.com/explore/abc", "status_code": 461},
+        )()
+        assert detect_risk_control("<html>正常页</html>", resp) is True
+
+    def test_status_471_empty_body_is_risk_control(self):
+        # 471 可能伴随空 body，仅凭状态码也应判定（不能被 html 空判断提前拦截）
+        resp = type(
+            "R",
+            (),
+            {"url": "https://www.xiaohongshu.com/explore/abc", "status_code": 471},
+        )()
+        assert detect_risk_control("", resp) is True
+
+    def test_status_200_not_risk_control(self):
+        resp = type(
+            "R",
+            (),
+            {"url": "https://www.xiaohongshu.com/explore/abc", "status_code": 200},
+        )()
+        assert detect_risk_control("<html>正常页</html>", resp) is False
 
     def test_frequency_text_still_detected(self):
         html = "<html>访问过于频繁</html>"

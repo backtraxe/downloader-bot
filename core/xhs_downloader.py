@@ -298,6 +298,12 @@ def detect_risk_control(html, response):
     会带 verifyMsg= 参数（error_code=300031 笔记无法浏览），全串子串匹配
     会误报为风控页并掩盖真正的笔记不存在提示。
     """
+    # 风控拦截状态码：471（catbus 实测口径 RISK_CONTROL，扫码登录常触发）、
+    # 461（MediaCrawler issue #757 记录）。放在 html 空判断之前——
+    # 拦截响应可能伴随空 body，仅凭状态码也应判定
+    status = getattr(response, "status_code", None)
+    if status in (461, 471):
+        return True
     if not html:
         return False
     # 文案兜底（文案可能变化，仅作辅助）
@@ -331,8 +337,9 @@ def detect_note_not_found(html, final_url):
     # 信号 1：重定向落地 URL 路径为 /404
     if "/404" in final_url:
         return True
-    # 信号 2：URL query 带 errorCode=-510001（小红书「笔记不存在」错误码）
-    if "errorcode=-510001" in final_url:
+    # 信号 2：URL query 带 errorCode=-510001 / -510000（小红书「笔记不存在」
+    # 错误码；-510000 为 MediaCrawler 口径的 not found，与 -510001 并列识别）
+    if "errorcode=-510001" in final_url or "errorcode=-510000" in final_url:
         return True
     # 信号 3：页面 title 文案
     if html and "你访问的页面不见了" in html:
@@ -429,7 +436,9 @@ def download_xhs_media(url, cookie, force=False):
         logger.error(
             "提取失败：小红书要求笔记链接携带 xsec_token（风控校验）。"
             "请复制带 xsec_token 参数的完整链接——浏览器地址栏里那一整段，"
-            "或 App 内点分享复制的短链（自带 token）。（耗时 %.1f 秒）",
+            "或 App 内点分享复制的短链（自带 token）。"
+            "注意：xsec_token 与获取时间、账号相关，旧分享链接携带的 token 可能"
+            "已过期被风控，请在 App 里重新获取该笔记的分享链接。（耗时 %.1f 秒）",
             time.time() - start_time,
         )
         return
