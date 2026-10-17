@@ -2,7 +2,7 @@ requests>=2.32
 fake_useragent>=2.2
 beautifulsoup4>=4.12
 curl_cffi>=0.15  # Termux 装不上不影响：http_client 有系统 curl 降级
-yt-dlp>=2026.6.9
+yt-dlp>=2026.8.19
 
 # 以下为可选依赖，装不上不影响核心下载功能：
 # Pillow>=10.0        # Termux 请用 pkg install python-pillow（PyPI 无 Android wheel）
