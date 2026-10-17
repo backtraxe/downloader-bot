@@ -99,8 +99,10 @@ def find_empty_cookie_values(text):
             # name 在第 6 列、value 在第 7 列；value 为空即空值条目。
             # 末行尾部 Tab 可能被上游的 .strip() 吃掉只剩 6 列——
             # "有 name 无 value 列"同样按空值计（Netscape 标准是 7 列）
-            if len(parts) >= 6 and parts[5].strip() and (
-                len(parts) < 7 or not parts[6].strip()
+            if (
+                len(parts) >= 6
+                and parts[5].strip()
+                and (len(parts) < 7 or not parts[6].strip())
             ):
                 empty.append(parts[5].strip())
     else:
