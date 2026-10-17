@@ -263,8 +263,9 @@ class TestPrepareOne:
             again.verify()
 
     def test_heic_missing_deps_falls_back(self, tmp_path, monkeypatch, caplog):
-        # pillow_heif 与 heif-convert 都不可用 → 原样返回（维持 document 现状），
-        # 日志给出安装提示；which 必须显式注入，用例才能离线不随宿主环境漂移
+        # pillow_heif、libheif CLI、ffmpeg 全不可用 → 原样返回（维持 document
+        # 现状），日志给出安装提示；which 必须显式注入，用例才能离线不随
+        # 宿主环境漂移
         monkeypatch.setitem(sys.modules, "pillow_heif", None)
         monkeypatch.setattr("telegram.upload.shutil.which", lambda name: None)
         p = _touch(tmp_path / "a.heic", b"x")
@@ -273,10 +274,11 @@ class TestPrepareOne:
         send, temp = _prepare_one(p, str(tmpdir))
         assert send == p and temp is None
         assert any("pillow-heif" in r.message for r in caplog.records)
+        assert any("ffmpeg" in r.message for r in caplog.records)
 
     def test_heic_heif_convert_cli_fallback(self, tmp_path, monkeypatch):
-        # pillow-heif 缺失时退而用 libheif 自带的 heif-convert CLI——
-        # Termux 一条 pkg install libheif 即可获得，免去源码装 pillow-heif
+        # pillow-heif 缺失时退而用 libheif CLI（老名 heif-convert）——
+        # 桌面发行版多数随 libheif 附带
         Image = pytest.importorskip("PIL.Image")
         monkeypatch.setitem(sys.modules, "pillow_heif", None)
         monkeypatch.setattr(
@@ -298,8 +300,32 @@ class TestPrepareOne:
         assert calls[0][1] == str(p) and calls[0][2].endswith("a.jpg")
         assert send.endswith("a.jpg") and temp == send
 
+    def test_heic_heif_dec_renamed_cli_fallback(self, tmp_path, monkeypatch):
+        # libheif 1.23 起 CLI 更名为 heif-dec（heif-convert 只是安装时创建
+        # 的别名链接），双名探测：老名不在场时用新名照样能转
+        Image = pytest.importorskip("PIL.Image")
+        monkeypatch.setitem(sys.modules, "pillow_heif", None)
+        monkeypatch.setattr(
+            "telegram.upload.shutil.which",
+            lambda name: "/usr/bin/heif-dec" if name == "heif-dec" else None,
+        )
+        calls = []
+
+        def fake_run(argv, **_kwargs):
+            calls.append(argv)
+            Image.new("RGB", (64, 48), (10, 200, 30)).save(argv[-1], format="JPEG")
+            return _Completed()
+
+        p = _touch(tmp_path / "a.heic", b"fake-heic-bytes")
+        tmpdir = tmp_path / "t"
+        tmpdir.mkdir()
+        send, temp = _prepare_one(str(p), str(tmpdir), _run=fake_run)
+        assert calls and calls[0][0] == "heif-dec"
+        assert send.endswith("a.jpg") and temp == send
+
     def test_heic_heif_convert_cli_failure_falls_back(self, tmp_path, monkeypatch):
-        # heif-convert 在场但转码失败（坏文件/非零退出）→ 维持 document 现状
+        # CLI 在场但转码失败（坏文件/非零退出）→ 改试 ffmpeg；ffmpeg 也缺
+        # → 维持 document 现状
         monkeypatch.setitem(sys.modules, "pillow_heif", None)
         monkeypatch.setattr(
             "telegram.upload.shutil.which",
@@ -308,6 +334,68 @@ class TestPrepareOne:
 
         def fake_run(argv, **_kwargs):
             return _Completed(returncode=1)
+
+        p = _touch(tmp_path / "a.heic", b"x")
+        tmpdir = tmp_path / "t"
+        tmpdir.mkdir()
+        send, temp = _prepare_one(str(p), str(tmpdir), _run=fake_run)
+        assert send == p and temp is None
+
+    def test_heic_ffmpeg_fallback_success(self, tmp_path, monkeypatch):
+        # pillow-heif 与 libheif CLI 都缺（Termux 实况：libheif 包不带 CLI）
+        # → ffmpeg 单帧导出兜底：HEIF 是 ISOBMFF 家族，ffmpeg 自带 demux
+        # + hevc 解码，不需要 libheif
+        Image = pytest.importorskip("PIL.Image")
+        monkeypatch.setitem(sys.modules, "pillow_heif", None)
+        monkeypatch.setattr(
+            "telegram.upload.shutil.which",
+            lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None,
+        )
+        calls = []
+
+        def fake_run(argv, **_kwargs):
+            calls.append(argv)
+            Image.new("RGB", (64, 48), (30, 30, 200)).save(argv[-1], format="JPEG")
+            return _Completed()
+
+        p = _touch(tmp_path / "a.heic", b"fake-heic-bytes")
+        tmpdir = tmp_path / "t"
+        tmpdir.mkdir()
+        send, temp = _prepare_one(str(p), str(tmpdir), _run=fake_run)
+        assert calls and calls[0][0] == "ffmpeg"
+        argv = calls[0]
+        assert argv[argv.index("-i") + 1] == str(p)
+        assert argv[argv.index("-frames:v") + 1] == "1"
+        assert "-q:v" in argv
+        assert send.endswith("a.jpg") and temp == send
+
+    def test_heic_ffmpeg_failure_returns_document(self, tmp_path, monkeypatch):
+        # ffmpeg 在场但转码失败（非零退出）→ 按文件原样发送
+        monkeypatch.setitem(sys.modules, "pillow_heif", None)
+        monkeypatch.setattr(
+            "telegram.upload.shutil.which",
+            lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None,
+        )
+
+        def fake_run(argv, **_kwargs):
+            return _Completed(returncode=1)
+
+        p = _touch(tmp_path / "a.heic", b"x")
+        tmpdir = tmp_path / "t"
+        tmpdir.mkdir()
+        send, temp = _prepare_one(str(p), str(tmpdir), _run=fake_run)
+        assert send == p and temp is None
+
+    def test_heic_ffmpeg_zero_output_rejected(self, tmp_path, monkeypatch):
+        # 退出码 0 但不落产物（半写/壳文件）→ 返回码 + 产物双确认拒绝
+        monkeypatch.setitem(sys.modules, "pillow_heif", None)
+        monkeypatch.setattr(
+            "telegram.upload.shutil.which",
+            lambda name: "/usr/bin/ffmpeg" if name == "ffmpeg" else None,
+        )
+
+        def fake_run(argv, **_kwargs):
+            return _Completed()  # 零退出，但一个字节都不写
 
         p = _touch(tmp_path / "a.heic", b"x")
         tmpdir = tmp_path / "t"

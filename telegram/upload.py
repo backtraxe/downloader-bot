@@ -14,10 +14,12 @@
     python -m telegram.upload <目标> --caption 标题
 
 限制：Bot API 上传单文件 ≤50MB。能预览的尽量预览：HEIC 与超标大图自动
-转码/压缩为 ≤10MB JPEG 走相册（HEIC 两路：pillow-heif 优先，缺失时回退
-libheif 自带的 heif-convert CLI——Termux `pkg install libheif` 即可获得，
-都缺才按文件发送）；>50MB 视频在本机有 ffmpeg 时压到 ~49MB 再发，没有则
-维持超限跳过。Telegram 上的是浏览版，原始字节始终在本地 download/。
+转码/压缩为 ≤10MB JPEG 走相册（HEIC 三路逐级兜底：pillow-heif 优先；次选
+libheif CLI——新版叫 heif-dec、老名 heif-convert 仅是别名链接，双名探测，
+仅桌面发行版可用；末路 ffmpeg 单帧导出——Termux 的 libheif 包不带 CLI，
+`pkg install ffmpeg` 即可；三路全缺才按文件发送）；>50MB 视频在本机有
+ffmpeg 时压到 ~49MB 再发，没有则维持超限跳过。Telegram 上的是浏览版，
+原始字节始终在本地 download/。
 超限走自建 telegram-bot-api（2GB）不在本脚本范围。
 """
 
@@ -143,13 +145,15 @@ def plan_uploads(files, document=False, size_of=os.path.getsize):
 
 
 def _try_heic_to_jpeg(path, tmpdir, _run=subprocess.run):
-    """HEIC/HEIF → JPEG 预览转码。两条路：
+    """HEIC/HEIF → JPEG 预览转码。三条路逐级兜底：
 
     1. Pillow + pillow-heif（桌面常规，惰性 import）；
-    2. libheif 自带的 heif-convert CLI 兜底——Termux 只要
-       `pkg install libheif` 即可获得，免去源码编译 pillow-heif；
-       pillow-heif 缺失或解码失败都会尝试 CLI。
-    两者都不可用/都失败返回 None（调用方维持 document 发送）。
+    2. libheif 官方 CLI——新版（1.23 起）叫 heif-dec，老名 heif-convert
+       只是安装时创建的别名链接，双名探测都认；仅桌面/服务器发行版随
+       libheif 附带，**Termux 的 libheif 包只有库文件、不含任何 CLI**；
+    3. ffmpeg 单帧导出：HEIF 本质是 ISOBMFF 容器，ffmpeg 原生 demux
+       + hevc 解码，不依赖 libheif——Termux `pkg install ffmpeg` 即可。
+    三者都不可用/都失败返回 None（调用方维持 document 发送）。
     """
     stem = os.path.splitext(os.path.basename(path))[0]
     out = os.path.join(tmpdir, stem + ".jpg")
@@ -166,12 +170,47 @@ def _try_heic_to_jpeg(path, tmpdir, _run=subprocess.run):
                 img.convert("RGB").save(out, format="JPEG", quality=95)
             return out
         except Exception:
-            logger.warning("HEIC 经 pillow-heif 转码失败，改试 heif-convert: %s", path)
+            logger.warning(
+                "HEIC 经 pillow-heif 转码失败，改试 libheif CLI/ffmpeg: %s", path
+            )
 
-    if shutil.which("heif-convert"):
+    cli = next(
+        (name for name in ("heif-convert", "heif-dec") if shutil.which(name)), None
+    )
+    if cli:
+        try:
+            proc = _run([cli, str(path), out], capture_output=True, timeout=60)
+        except Exception:
+            proc = None
+        if (
+            proc is not None
+            and getattr(proc, "returncode", 1) == 0
+            and os.path.exists(out)
+            and os.path.getsize(out) > 0
+        ):
+            return out
+        logger.warning("HEIC 经 %s 转码失败，改试 ffmpeg: %s", cli, path)
+
+    if shutil.which("ffmpeg"):
+        # -frames:v 1 取首帧（xhs 静态 HEIC 单帧；-y 防 CLI 半写产物残留）
         try:
             proc = _run(
-                ["heif-convert", str(path), out], capture_output=True, timeout=60
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(path),
+                    "-frames:v",
+                    "1",
+                    "-q:v",
+                    "2",
+                    out,
+                ],
+                capture_output=True,
+                timeout=60,
             )
         except Exception:
             proc = None
@@ -182,13 +221,14 @@ def _try_heic_to_jpeg(path, tmpdir, _run=subprocess.run):
             and os.path.getsize(out) > 0
         ):
             return out
-        logger.warning("heif-convert 转码失败，按文件原样发送: %s", path)
+        logger.warning("ffmpeg 转码 HEIC 失败，按文件原样发送: %s", path)
         return None
 
     logger.warning(
-        "HEIC 预览转码不可用：未装 pillow-heif，也未找到 heif-convert。"
-        "Termux 运行 pkg install libheif 即可获得 heif-convert（推荐，免编译）；"
-        "完整方案再补 pip install pillow-heif。未安装时 HEIC 按文件原样发送"
+        "HEIC 预览转码不可用：未装 pillow-heif，也未找到 libheif CLI"
+        "（heif-convert/heif-dec）与 ffmpeg。Termux 装 ffmpeg 即可"
+        "（pkg install ffmpeg，与视频压缩同款依赖）；桌面建议"
+        " pip install pillow-heif。未安装时 HEIC 按文件原样发送"
     )
     return None
 

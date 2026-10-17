@@ -8,7 +8,7 @@
 pip install -r requirements.txt
 ```
 
-**Termux**：先 `bash setup_termux.sh`（脚本内含 `pkg install python-pillow`——Pillow 无 Android 预编译 wheel，不能用 pip 装）。Pillow / pillow-heif 均为可选依赖，没有也能下载（装饰过滤自动回退体积阈值、不能转 HEIC）。
+**Termux**：先 `bash setup_termux.sh`（脚本内含 `pkg install python-pillow`——Pillow 无 Android 预编译 wheel，不能用 pip 装）。Pillow / pillow-heif 均为可选依赖，没有也能下载（装饰过滤自动回退体积阈值；HEIC 预览转码另有 libheif CLI/ffmpeg 兜底，live_photo 工具仍需 pillow-heif）。
 
 ## 使用
 
@@ -235,7 +235,7 @@ python -m telegram.bot      # 机器人模式：等消息
 python -m telegram.upload download/xiaohongshu/某作者/某笔记_xxx/   # 直发模式
 ```
 
-限制：官方 Bot API 上传单文件 **≤50MB**；能预览的尽量预览——HEIC 与超标大图自动转码/压缩为 ≤10MB JPEG 走相册（HEIC 两路转码：Pillow/pillow-heif 优先，缺失时回退 libheif 自带的 `heif-convert` CLI——**Termux 上 `pkg install libheif` 一条命令即可获得**，两者都缺才回退按文件发送），>50MB 视频在本机有 ffmpeg 时压到 ~49MB 再发，没有则维持超限跳过；Telegram 上的是浏览版，原始字节始终在本地 `download/`。bot 模式的过程提示消息（开始下载/没识别到链接/失败提示等）默认 5 分钟后自动删除（`config.json` telegram 段的 `process_message_ttl_seconds`，0 关闭；相册/视频等媒体消息永不删）。需要 ≤2GB 就得自建 telegram-bot-api 服务，不在本仓库范围。
+限制：官方 Bot API 上传单文件 **≤50MB**；能预览的尽量预览——HEIC 与超标大图自动转码/压缩为 ≤10MB JPEG 走相册（HEIC 三路转码：Pillow/pillow-heif 优先；次选 libheif CLI（新版 `heif-dec`、老名 `heif-convert`），仅桌面发行版附带，**Termux 的 libheif 包不带 CLI**；末路 ffmpeg 单帧导出——**Termux `pkg install ffmpeg` 一条命令即可**，与 >50MB 视频压缩同款依赖；三路全缺才回退按文件发送），>50MB 视频在本机有 ffmpeg 时压到 ~49MB 再发，没有则维持超限跳过；Telegram 上的是浏览版，原始字节始终在本地 `download/`。bot 模式的过程提示消息（开始下载/没识别到链接/失败提示等）默认 5 分钟后自动删除（`config.json` telegram 段的 `process_message_ttl_seconds`，0 关闭；相册/视频等媒体消息永不删）。需要 ≤2GB 就得自建 telegram-bot-api 服务，不在本仓库范围。
 
 ## Termux 与 TLS 指纹伪装（curl_cffi）
 
