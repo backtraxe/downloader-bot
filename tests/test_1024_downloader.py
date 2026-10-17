@@ -171,6 +171,78 @@ class TestDownloadFileDecorFilter:
         assert os.path.exists(target)
 
 
+# ---------------- download_file --force ----------------
+
+
+class TestDownloadFileForce:
+    """--force 强制重下：跳过幂等判断、覆盖旧文件、失败不破坏旧产物。"""
+
+    def _fake_session(self, body, content_type="image/jpeg"):
+        class S:
+            def get(self, url, **kw):
+                return _FakeImageResp(body, content_type)
+
+        return S()
+
+    def _boom_session(self):
+        class S:
+            def get(self, url, **kw):
+                raise RuntimeError("boom")
+
+        return S()
+
+    def test_force_overwrites_existing_no_dup(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        target = str(tmp_path / "001.jpg")
+        with open(target, "wb") as f:
+            f.write(b"old")
+        result = mod.download_file(
+            self._fake_session(b"new" * 10000),
+            "http://img/001.jpg",
+            target,
+            "http://page",
+            force=True,
+        )
+        assert "[成功]" in result
+        with open(target, "rb") as f:
+            assert f.read() == b"new" * 10000
+        # 无 .part 残留、无 _1 副本，目录里只有覆盖后的那一个文件
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["001.jpg"]
+
+    def test_force_failure_preserves_existing(self, tmp_path, monkeypatch):
+        # 强制重下中途失败：旧文件保持原样（.part 临时文件被清理）
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        target = str(tmp_path / "001.jpg")
+        with open(target, "wb") as f:
+            f.write(b"old")
+        result = mod.download_file(
+            self._boom_session(),
+            "http://img/001.jpg",
+            target,
+            "http://page",
+            force=True,
+        )
+        assert "[失败]" in result
+        with open(target, "rb") as f:
+            assert f.read() == b"old"
+        assert not os.path.exists(target + ".part")
+
+    def test_stale_part_not_treated_as_downloaded(self, tmp_path, monkeypatch):
+        # 强制重下被强杀后残留的 .part 不应让普通重跑误判"已下载"
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        target = str(tmp_path / "001.jpg")
+        with open(target + ".part", "wb") as f:
+            f.write(b"partial")
+        result = mod.download_file(
+            self._fake_session(b"x" * 30000),
+            "http://img/001.jpg",
+            target,
+            "http://page",
+        )
+        assert "[成功]" in result
+        assert os.path.getsize(target) == 30000
+
+
 # ---------------- make_page_dir_name ----------------
 
 

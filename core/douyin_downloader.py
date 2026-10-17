@@ -598,11 +598,15 @@ def _fetch_page(session, url, headers, max_retries=5):
     return None
 
 
-def download_file(session, url, filepath, headers, max_retries=5):
+def download_file(session, url, filepath, headers, max_retries=5, force=False):
     """单文件下载，供多线程调用。文件名冲突原子去重，绝不覆盖。
-    拦截到 HTML 响应（被 CDN 防盗链/风控）直接判失败。"""
+    拦截到 HTML 响应（被 CDN 防盗链/风控）直接判失败。
+    force=True（--force）时跳过幂等判断强制重下：写 .part 临时文件，
+    成功后原子替换旧产物，中途失败不破坏旧文件。"""
     stem, _ = os.path.splitext(filepath)
-    if glob.glob(stem + ".*"):
+    # .part 残留（强制重下被强杀）不算已下载
+    existing = [p for p in glob.glob(stem + ".*") if not p.endswith(".part")]
+    if not force and existing:
         return f"  [跳过] {os.path.basename(filepath)} 已存在，无需重复下载"
     url = ensure_https(url)
     last_err = None
@@ -627,12 +631,18 @@ def download_file(session, url, filepath, headers, max_retries=5):
                 if old_ext.lower() != ext.lower():
                     filepath = root + ext
 
-            safe_path = unique_path(filepath)
+            if force:
+                # 强制重下：写临时文件，成功后原子替换（失败不动旧文件）
+                safe_path = filepath + ".part"
+            else:
+                safe_path = unique_path(filepath)
             with open(safe_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-            return f"  [成功] -> {os.path.basename(safe_path)}"
+            if force:
+                os.replace(safe_path, filepath)  # 原子替换旧产物，不留 .part
+            return f"  [成功] -> {os.path.basename(filepath)}"
         except Exception as e:
             if safe_path and os.path.exists(safe_path):
                 try:
@@ -656,8 +666,9 @@ def download_file(session, url, filepath, headers, max_retries=5):
     return f"  [失败] {os.path.basename(filepath)} 下载报错: {last_err}"
 
 
-def download_douyin_note(url, cookie):
-    """下载抖音图文笔记的全部图片（及笔记级视频/实况图视频）。"""
+def download_douyin_note(url, cookie, force=False):
+    """下载抖音图文笔记的全部图片（及笔记级视频/实况图视频）。
+    force=True（--force）时强制重下，覆盖已存在的旧产物。"""
     start_time = time.time()
     headers = get_headers(cookie)
     session = http_client.Session()
@@ -759,7 +770,9 @@ def download_douyin_note(url, cookie):
     if download_tasks:
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [
-                executor.submit(download_file, session, task[0], task[1], headers)
+                executor.submit(
+                    download_file, session, task[0], task[1], headers, force=force
+                )
                 for task in download_tasks
             ]
             succeeded = failed = 0
@@ -786,7 +799,7 @@ def download_douyin_note(url, cookie):
     logger.info("该链接处理完成，耗时 %.1f 秒。", time.time() - start_time)
 
 
-def download_douyin_video(url, cookie):
+def download_douyin_video(url, cookie, force=False):
     """下载抖音视频（douyin.com/video/<id>）。
 
     走签名的 detail API（见 build_signed_detail_url 头注）——2026-08/09
@@ -794,6 +807,7 @@ def download_douyin_video(url, cookie):
     三件套（同一个 API、同一份 Cookie）。播放地址取网页播放端 play_addr
     无水印 CDN 净版，按候选顺序尝试直至成功。落盘与 yt-dlp 后端同构：
     download/douyin/[<作者>/]<标题前30字>_<awemeId>.mp4。
+    force=True（--force）时强制重下，覆盖已存在的旧产物。
     """
     start_time = time.time()
     m = _VIDEO_URL_RE.search(url or "")
@@ -831,7 +845,7 @@ def download_douyin_video(url, cookie):
     headers = get_headers(cookie)
     ok = False
     for candidate in play_urls:
-        result = download_file(session, candidate, filepath, headers)
+        result = download_file(session, candidate, filepath, headers, force=force)
         if result.startswith("  [失败]"):
             logger.error("%s", result)
             continue

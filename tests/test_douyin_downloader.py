@@ -8,6 +8,8 @@ fixture 结构来自 2026 年真实 douyin.com/note 页面：
 """
 
 import json
+import os
+
 from urllib.parse import quote
 
 import pytest
@@ -717,3 +719,71 @@ class TestExtractVideoPlayUrls:
 
         assert extract_video_play_urls({}) == []
         assert extract_video_play_urls(None) == []
+
+
+# ---------------- download_file --force ----------------
+
+
+class TestDownloadFileForce:
+    """--force 强制重下：跳过幂等判断、覆盖旧文件、失败不破坏旧产物。"""
+
+    @staticmethod
+    def _fake_session(body, content_type="video/mp4"):
+        class R:
+            status_code = 200
+            headers = {"Content-Type": content_type}
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, chunk_size=8192):
+                yield body
+
+        class S:
+            def get(self, url, **kw):
+                return R()
+
+        return S()
+
+    def test_force_overwrites_existing_no_dup(self, tmp_path, monkeypatch):
+        import core.douyin_downloader as mod
+
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        target = str(tmp_path / "video.mp4")
+        with open(target, "wb") as f:
+            f.write(b"old")
+        result = mod.download_file(
+            self._fake_session(b"new-bytes"),
+            "http://www.douyin.com/aweme/v1/media/video.mp4",
+            target,
+            {},
+            force=True,
+        )
+        assert "[成功]" in result
+        with open(target, "rb") as f:
+            assert f.read() == b"new-bytes"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["video.mp4"]
+
+    def test_force_failure_preserves_existing(self, tmp_path, monkeypatch):
+        import core.douyin_downloader as mod
+
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        target = str(tmp_path / "video.mp4")
+        with open(target, "wb") as f:
+            f.write(b"old")
+
+        class S:
+            def get(self, url, **kw):
+                raise RuntimeError("boom")
+
+        result = mod.download_file(
+            S(),
+            "http://www.douyin.com/aweme/v1/media/video.mp4",
+            target,
+            {},
+            force=True,
+        )
+        assert "[失败]" in result
+        with open(target, "rb") as f:
+            assert f.read() == b"old"
+        assert not os.path.exists(target + ".part")

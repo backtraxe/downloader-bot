@@ -132,15 +132,19 @@ def fetch_page(session, url, headers, max_attempts=3):
     return None
 
 
-def download_file(session, url, filepath, page_url):
+def download_file(session, url, filepath, page_url, force=False):
     """单文件下载逻辑，增加防盗链绕过。文件名冲突时原子去重，绝不覆盖；
     下载后按 Content-Type 校正扩展名，避免名实不符。
+    force=True（--force）时跳过幂等判断强制重下：写 .part 临时文件，
+    成功后原子替换旧产物，中途失败不破坏旧文件。
     注意：落盘文件名已是 <标题>_NN 序号名，按名称的装饰过滤在
     collect_media_urls 扫描阶段基于原始 URL 完成，此处不做名称检查。"""
     # 重下幂等：目标已存在（含扩展名变体，如 001.jpg / 001.png 同一序号）
-    # 直接跳过，避免重复下载产生 001_1 副本
+    # 直接跳过，避免重复下载产生 001_1 副本；
+    # .part 残留（强制重下被强杀）不算已下载
     stem, _ = os.path.splitext(filepath)
-    if glob.glob(stem + ".*"):
+    existing = [p for p in glob.glob(stem + ".*") if not p.endswith(".part")]
+    if not force and existing:
         return f"  [跳过] {os.path.basename(filepath)} 已存在，无需重复下载"
 
     # 专门为图片下载准备的仿真请求头
@@ -175,13 +179,17 @@ def download_file(session, url, filepath, page_url):
         if old_ext.lower() != ext.lower():
             filepath = name + ext
 
-        # 原子去重：并发同名不会撞车覆盖
-        safe_path = unique_path(filepath)
+        # force=强制重下：写 .part 成功后原子替换（失败不动旧文件）；
+        # 否则原子去重——并发同名不会撞车覆盖
+        safe_path = (filepath + ".part") if force else unique_path(filepath)
 
         with open(safe_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
+        if force:
+            os.replace(safe_path, filepath)  # 原子替换旧产物，不留 .part
+            safe_path = filepath
 
         # 装饰图过滤：优先按宽高（短边过小判为头像/logo），解析不出再按体积。
         # 视频不过滤——短视频也可能很小。
@@ -357,8 +365,9 @@ def build_media_tasks(media_items, base_path):
     return tasks
 
 
-def extract_general_media(url):
-    """深度解析并下载静态网站的隐藏媒体文件"""
+def extract_general_media(url, force=False):
+    """深度解析并下载静态网站的隐藏媒体文件。
+    force=True（--force）时强制重下，覆盖已存在的旧产物。"""
     start_time = time.time()
     headers = get_headers()
     session = Session()
@@ -400,7 +409,7 @@ def extract_general_media(url):
 
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = [
-            executor.submit(download_file, session, task[0], task[1], url)
+            executor.submit(download_file, session, task[0], task[1], url, force=force)
             for task in download_tasks
         ]
 

@@ -64,6 +64,13 @@ class TestBuildYdlOptsAuthor:
     def test_merge_output_format_mp4(self):
         assert build_ydl_opts("youtube")["merge_output_format"] == "mp4"
 
+    def test_force_enables_overwrites(self):
+        # --force → yt-dlp 覆盖已存在文件（默认保持 yt-dlp 自身的跳过语义）
+        assert build_ydl_opts("bilibili", force=True)["overwrites"] is True
+
+    def test_default_no_overwrites_key(self):
+        assert "overwrites" not in build_ydl_opts("bilibili")
+
 
 # ---------------- dispatch_url 路由 ----------------
 
@@ -78,7 +85,7 @@ class TestDispatchUrl:
         monkeypatch.setattr("core.sites.load_cookie_for_url", lambda url: "fake_cookie")
         monkeypatch.setattr(
             "core.xhs_downloader.download_xhs_media",
-            lambda url, cookie: calls.append(("xhs", url, cookie)),
+            lambda url, cookie, force=False: calls.append(("xhs", url, cookie)),
         )
         downloader.dispatch_url("https://www.xiaohongshu.com/explore/abc")
         assert calls == [
@@ -92,7 +99,7 @@ class TestDispatchUrl:
         monkeypatch.setattr("core.sites.load_cookie_for_url", lambda url: None)
         monkeypatch.setattr(
             "core.xhs_downloader.download_xhs_media",
-            lambda url, cookie: calls.append(("xhs", url, cookie)),
+            lambda url, cookie, force=False: calls.append(("xhs", url, cookie)),
         )
         # Cookie 为空时不应调用 xhs 下载
         downloader.dispatch_url("https://xhslink.com/abc")
@@ -112,7 +119,9 @@ class TestDispatchUrl:
         import core.downloader as downloader
 
         calls = []
-        monkeypatch.setattr("core.downloader.download_url", lambda u: calls.append(u))
+        monkeypatch.setattr(
+            "core.downloader.download_url", lambda u, force=False: calls.append(u)
+        )
         downloader.dispatch_url(url)
         assert calls == [url]
 
@@ -122,10 +131,58 @@ class TestDispatchUrl:
         calls = []
         monkeypatch.setattr(
             "core.1024_downloader.extract_general_media",
-            lambda url: calls.append(url),
+            lambda url, force=False: calls.append(url),
         )
         downloader.dispatch_url("https://example.com/some/page")
         assert calls == ["https://example.com/some/page"]
+
+    # ---- --force 逐层透传 ----
+
+    def test_xiaohongshu_force_passthrough(self, monkeypatch):
+        import core.downloader as downloader
+
+        forces = []
+        monkeypatch.setattr("core.sites.load_cookie_for_url", lambda url: "fake_cookie")
+        monkeypatch.setattr(
+            "core.xhs_downloader.download_xhs_media",
+            lambda url, cookie, force=False: forces.append(force),
+        )
+        downloader.dispatch_url("https://www.xiaohongshu.com/explore/abc", force=True)
+        assert forces == [True]
+
+    def test_ytdlp_force_passthrough(self, monkeypatch):
+        import core.downloader as downloader
+
+        forces = []
+        monkeypatch.setattr(
+            "core.downloader.download_url", lambda u, force=False: forces.append(force)
+        )
+        downloader.dispatch_url("https://www.bilibili.com/video/BV1xx", force=True)
+        assert forces == [True]
+
+    def test_unknown_site_force_passthrough(self, monkeypatch):
+        import core.downloader as downloader
+
+        forces = []
+        monkeypatch.setattr(
+            "core.1024_downloader.extract_general_media",
+            lambda url, force=False: forces.append(force),
+        )
+        downloader.dispatch_url("https://example.com/some/page", force=True)
+        assert forces == [True]
+
+    def test_force_defaults_to_false(self, monkeypatch):
+        # 不带 --force 时保持旧行为：force=False 逐层下传
+        import core.downloader as downloader
+
+        forces = []
+        monkeypatch.setattr("core.sites.load_cookie_for_url", lambda url: "fake_cookie")
+        monkeypatch.setattr(
+            "core.xhs_downloader.download_xhs_media",
+            lambda url, cookie, force=False: forces.append(force),
+        )
+        downloader.dispatch_url("https://www.xiaohongshu.com/explore/abc")
+        assert forces == [False]
 
 
 class TestDiagnoseError:
@@ -264,7 +321,7 @@ class TestDispatchDouyinNoteRouting:
         monkeypatch.setattr("core.sites.load_cookie_for_url", lambda url: "raw_cookie")
         monkeypatch.setattr(
             "core.douyin_downloader.download_douyin_note",
-            lambda url, cookie: calls.append(("note", url, cookie)),
+            lambda url, cookie, force=False: calls.append(("note", url, cookie)),
         )
         downloader.dispatch_url("https://www.douyin.com/note/7666381907030529443")
         # 原始文件内容（可能是 Netscape）经 cookie_text_to_header 转换为请求头
@@ -279,7 +336,7 @@ class TestDispatchDouyinNoteRouting:
         monkeypatch.setattr("core.sites.load_cookie_for_url", lambda url: None)
         monkeypatch.setattr(
             "core.douyin_downloader.download_douyin_note",
-            lambda url, cookie: calls.append(("note", url, cookie)),
+            lambda url, cookie, force=False: calls.append(("note", url, cookie)),
         )
         downloader.dispatch_url("https://www.douyin.com/note/7666381907030529443")
         assert calls == []
@@ -293,14 +350,15 @@ class TestDispatchDouyinNoteRouting:
         monkeypatch.setattr("core.sites.load_cookie_for_url", lambda url: "raw_cookie")
         monkeypatch.setattr(
             "core.douyin_downloader.download_douyin_video",
-            lambda url, cookie: video_calls.append((url, cookie)),
+            lambda url, cookie, force=False: video_calls.append((url, cookie)),
         )
         monkeypatch.setattr(
             "core.douyin_downloader.download_douyin_note",
-            lambda url, cookie: note_calls.append(url),
+            lambda url, cookie, force=False: note_calls.append(url),
         )
         monkeypatch.setattr(
-            "core.downloader.download_url", lambda u: ytdlp_calls.append(u)
+            "core.downloader.download_url",
+            lambda u, force=False: ytdlp_calls.append(u),
         )
         downloader.dispatch_url("https://www.douyin.com/video/7666381907030529443")
         assert video_calls == [
@@ -315,10 +373,38 @@ class TestDispatchDouyinNoteRouting:
         monkeypatch.setattr("core.sites.load_cookie_for_url", lambda url: None)
         monkeypatch.setattr(
             "core.douyin_downloader.download_douyin_video",
-            lambda url, cookie: video_calls.append(url),
+            lambda url, cookie, force=False: video_calls.append(url),
         )
         downloader.dispatch_url("https://www.douyin.com/video/7666381907030529443")
         assert video_calls == []
+
+    def test_note_url_force_passthrough(self, monkeypatch):
+        import core.downloader as downloader
+
+        forces = []
+        monkeypatch.setattr("core.sites.load_cookie_for_url", lambda url: "raw_cookie")
+        monkeypatch.setattr(
+            "core.douyin_downloader.download_douyin_note",
+            lambda url, cookie, force=False: forces.append(force),
+        )
+        downloader.dispatch_url(
+            "https://www.douyin.com/note/7666381907030529443", force=True
+        )
+        assert forces == [True]
+
+    def test_video_url_force_passthrough(self, monkeypatch):
+        import core.downloader as downloader
+
+        forces = []
+        monkeypatch.setattr("core.sites.load_cookie_for_url", lambda url: "raw_cookie")
+        monkeypatch.setattr(
+            "core.douyin_downloader.download_douyin_video",
+            lambda url, cookie, force=False: forces.append(force),
+        )
+        downloader.dispatch_url(
+            "https://www.douyin.com/video/7666381907030529443", force=True
+        )
+        assert forces == [True]
 
 
 class TestResolveShortLinkWithRetry:

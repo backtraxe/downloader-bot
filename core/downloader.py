@@ -108,13 +108,14 @@ def resolve_uploader(info):
     return sanitize_filename(raw)
 
 
-def build_ydl_opts(site_name, author=""):
+def build_ydl_opts(site_name, author="", force=False):
     """构造 yt-dlp 下载选项。
 
     cookiefile 指向 cookies/<site>.txt；文件为空时 yt-dlp 会忽略，
     由调用方在下载前提示用户是否需要填写 Cookie。
     author 非空时输出路径多一层作者目录：download/<site>/<author>/<标题>.<ext>；
     为空则退化为 download/<site>/<标题>.<ext>（不产生 NA/ 或 unknown/ 占位）。
+    force=True（--force）时增加 overwrites，覆盖已存在文件强制重下。
     """
     cookie_path = cookie_file_for(site_name)
     # 空文件 / 不存在都不传 cookiefile，避免 yt-dlp 警告
@@ -128,7 +129,7 @@ def build_ydl_opts(site_name, author=""):
         outtmpl_parts.append(author)
     outtmpl_parts.append("%(title).200B.%(ext)s")
 
-    return {
+    opts = {
         # 输出路径：download/<site>[/<author>]/<标题>.<ext>
         "outtmpl": os.path.join(*outtmpl_parts),
         # 视频音频合并为 mp4
@@ -149,6 +150,10 @@ def build_ydl_opts(site_name, author=""):
         "fragment_retries": 10,
         "progress_hooks": [_on_progress],
     }
+    if force:
+        # --force：覆盖已存在文件，跳过 yt-dlp 默认的"已下载"跳过
+        opts["overwrites"] = True
+    return opts
 
 
 def _on_progress(d):
@@ -247,13 +252,14 @@ def resolve_short_link_with_retry(url, attempts=3):
     return url
 
 
-def dispatch_url(url):
+def dispatch_url(url, force=False):
     """统一入口：按站点自动分发到对应下载器。
 
     xiaohongshu     → xhs_downloader（手写解析，需 Cookie）
     抖音图文/视频   → douyin_downloader（手写解析+签名 detail API，需登录 Cookie）
     yt-dlp 站点     → download_url（bilibili / youtube / instagram / twitter）
     其他站点        → 1024_downloader（通用静态网页抓取）
+    force=True（--force）时逐层下传，跳过幂等判断强制重下覆盖旧产物。
     """
     site_name = get_site_name(url)
 
@@ -264,7 +270,7 @@ def dispatch_url(url):
 
         cookie = load_cookie_for_url(url)
         if cookie:
-            download_xhs_media(url, cookie)
+            download_xhs_media(url, cookie, force=force)
         return
 
     if site_name == "douyin":
@@ -286,27 +292,32 @@ def dispatch_url(url):
             cookie = load_cookie_for_url(url)
             if cookie:
                 if is_douyin_note_url(resolved):
-                    download_douyin_note(resolved, cookie_text_to_header(cookie))
+                    download_douyin_note(
+                        resolved, cookie_text_to_header(cookie), force=force
+                    )
                 else:
-                    download_douyin_video(resolved, cookie_text_to_header(cookie))
+                    download_douyin_video(
+                        resolved, cookie_text_to_header(cookie), force=force
+                    )
         else:
             # /user/ 等其他 douyin URL 仍兜底 yt-dlp
-            download_url(url)
+            download_url(url, force=force)
         return
 
     if site_name in _YTDLP_SITES:
-        download_url(url)
+        download_url(url, force=force)
         return
 
     # 未知站点：交给通用静态网页抓取器
     from importlib import import_module
 
     mod = import_module("core.1024_downloader")
-    mod.extract_general_media(url)
+    mod.extract_general_media(url, force=force)
 
 
-def download_url(url):
-    """下载单个 URL。自动识别站点并应用对应 cookie。"""
+def download_url(url, force=False):
+    """下载单个 URL。自动识别站点并应用对应 cookie。
+    force=True（--force）时传 overwrites 强制重下，覆盖已存在文件。"""
     site_name = get_site_name(url)
     if site_name not in SITE_REQUIRE_COOKIE:
         logger.warning(
@@ -354,7 +365,7 @@ def download_url(url):
                 info = ydl.extract_info(url, download=False)
                 author = resolve_uploader(info)
 
-            opts = build_ydl_opts(site_name, author=author)
+            opts = build_ydl_opts(site_name, author=author, force=force)
             with yt_dlp.YoutubeDL(opts) as ydl:
                 # 再 extract 并下载；失败给出明确原因
                 info = ydl.extract_info(url, download=True)
@@ -419,9 +430,25 @@ def download_url(url):
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="统一下载器：粘贴链接循环下载（输入 q 退出）"
+    )
+    parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="强制重新下载：覆盖已存在的下载产物（默认重跑同链接会跳过已下载文件）",
+    )
+    args = parser.parse_args()
+    force = args.force
+
     logger.info(
         "🚀 统一下载器支持: 小红书 / bilibili / douyin / youtube / instagram / x / 任意网页"
     )
+    if force:
+        logger.info("⚡ --force 已开启：重复链接将覆盖已存在的文件重新下载")
     logger.info("输入 q 退出")
     while True:
         try:
@@ -442,7 +469,7 @@ def main():
             continue
 
         for target_url in urls:
-            dispatch_url(target_url)
+            dispatch_url(target_url, force=force)
 
 
 if __name__ == "__main__":

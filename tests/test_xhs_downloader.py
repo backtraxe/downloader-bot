@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """xhs_downloader.py 纯函数单元测试（无网络依赖）"""
 
+import os
+
 from core.xhs_downloader import (
     detect_note_not_found,
     detect_risk_control,
@@ -686,3 +688,65 @@ class TestDetectMissingXsecToken:
 
         assert detect_missing_xsec_token("", "") is False
         assert detect_missing_xsec_token(None, None) is False
+
+
+# ---------------- download_file --force ----------------
+
+
+class TestDownloadFileForce:
+    """--force 强制重下：跳过幂等判断、覆盖旧文件、失败不破坏旧产物。"""
+
+    @staticmethod
+    def _fake_session(body, content_type="image/jpeg"):
+        class R:
+            status_code = 200
+            headers = {"Content-Type": content_type}
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, chunk_size=8192):
+                yield body
+
+        class S:
+            def get(self, url, **kw):
+                return R()
+
+        return S()
+
+    def test_force_overwrites_existing_no_dup(self, tmp_path, monkeypatch):
+        import core.xhs_downloader as mod
+
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        target = str(tmp_path / "001.jpg")
+        with open(target, "wb") as f:
+            f.write(b"old")
+        result = mod.download_file(
+            self._fake_session(b"new-bytes"),
+            "http://img/001.jpg",
+            target,
+            {},
+            force=True,
+        )
+        assert "[成功]" in result
+        with open(target, "rb") as f:
+            assert f.read() == b"new-bytes"
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["001.jpg"]
+
+    def test_force_failure_preserves_existing(self, tmp_path, monkeypatch):
+        import core.xhs_downloader as mod
+
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        target = str(tmp_path / "001.jpg")
+        with open(target, "wb") as f:
+            f.write(b"old")
+
+        class S:
+            def get(self, url, **kw):
+                raise RuntimeError("boom")
+
+        result = mod.download_file(S(), "http://img/001.jpg", target, {}, force=True)
+        assert "[失败]" in result
+        with open(target, "rb") as f:
+            assert f.read() == b"old"
+        assert not os.path.exists(target + ".part")

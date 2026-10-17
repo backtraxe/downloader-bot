@@ -100,14 +100,18 @@ def _build_session():
     return http_client.Session()
 
 
-def download_file(session, url, filepath, headers, max_retries=5):
+def download_file(session, url, filepath, headers, max_retries=5, force=False):
     """单文件下载逻辑，供多线程调用。文件名冲突时原子去重，绝不覆盖。
     对 DNS 解析失败、连接超时等瞬时网络错误自动重试，提高下载成功率。
-    流式写入失败时清理残留文件，避免重试留下损坏文件。"""
+    流式写入失败时清理残留文件，避免重试留下损坏文件。
+    force=True（--force）时跳过幂等判断强制重下：写 .part 临时文件，
+    成功后原子替换旧产物，中途失败不破坏旧文件。"""
     # 重下幂等：目标序号文件已存在（含扩展名变体）直接跳过，
-    # 避免重复下载同一笔记产生 001_1 副本
+    # 避免重复下载同一笔记产生 001_1 副本；
+    # .part 残留（强制重下被强杀）不算已下载
     stem, _ = os.path.splitext(filepath)
-    if glob.glob(stem + ".*"):
+    existing = [p for p in glob.glob(stem + ".*") if not p.endswith(".part")]
+    if not force and existing:
         return f"  [跳过] {os.path.basename(filepath)} 已存在，无需重复下载"
     url = ensure_https(url)
     last_err = None
@@ -129,12 +133,18 @@ def download_file(session, url, filepath, headers, max_retries=5):
                 if old_ext.lower() != ext.lower():
                     filepath = root + ext
 
-            safe_path = unique_path(filepath)
+            if force:
+                # 强制重下：写临时文件，成功后原子替换（失败不动旧文件）
+                safe_path = filepath + ".part"
+            else:
+                safe_path = unique_path(filepath)
             with open(safe_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-            return f"  [成功] -> {os.path.basename(safe_path)}"
+            if force:
+                os.replace(safe_path, filepath)  # 原子替换旧产物，不留 .part
+            return f"  [成功] -> {os.path.basename(filepath)}"
         except Exception as e:
             # 流式写入中途失败时清理残留文件（含空占位和 partial 写入），
             # 避免重试时 unique_path 跳过它而留下损坏文件
@@ -384,7 +394,9 @@ def _fetch_page(session, url, headers, max_retries=5):
     return None
 
 
-def download_xhs_media(url, cookie):
+def download_xhs_media(url, cookie, force=False):
+    """下载小红书笔记全部媒体（图片/实况/视频）。
+    force=True（--force）时强制重下，覆盖已存在的旧产物。"""
     start_time = time.time()
     # 每次解析新链接都生成一个全新的随机 Header
     headers = get_headers(cookie)
@@ -516,7 +528,9 @@ def download_xhs_media(url, cookie):
             with ThreadPoolExecutor(max_workers=5) as executor:
                 # 提交所有下载任务
                 futures = [
-                    executor.submit(download_file, session, task[0], task[1], headers)
+                    executor.submit(
+                        download_file, session, task[0], task[1], headers, force=force
+                    )
                     for task in download_tasks
                 ]
 
