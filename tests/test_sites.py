@@ -17,6 +17,9 @@ class TestGetSiteName:
             ("https://xhslink.cn/abc", "xiaohongshu"),
             # 小红书 App 分享文本常见形式（短链 .cn）
             ("http://xhslink.cn/o/3V9olrzZIZU", "xiaohongshu"),
+            # RedNote 国际版（XHS-Downloader V2.8 / MediaCrawler 均已支持，
+            # 与 xiaohongshu 同引擎、共用同一 cookie 文件）
+            ("https://www.rednote.com/explore/abc", "xiaohongshu"),
             # bilibili
             ("https://www.bilibili.com/video/BV1xx", "bilibili"),
             ("https://b23.tv/abc", "bilibili"),
