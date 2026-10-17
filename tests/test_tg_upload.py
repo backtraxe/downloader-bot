@@ -283,7 +283,10 @@ class TestPrepareOne:
         assert temp is not None and send == temp
         assert send.endswith(".jpg") and str(tmpdir) in send
 
-    def test_video_bitrate_from_duration(self, tmp_path):
+    def test_video_bitrate_from_duration(self, tmp_path, monkeypatch):
+        # 宿主机没装 ffmpeg/ffprobe（如 CI runner）时 which 探测会拦住
+        # 注入的假 _run——必须连 which 一起注入，用例才真正离线、环境无关
+        monkeypatch.setattr("telegram.upload.shutil.which", lambda name: name)
         calls = []
 
         def fake_run(argv, **_kwargs):
