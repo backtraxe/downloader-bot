@@ -14,8 +14,9 @@
     python -m telegram.upload <目标> --caption 标题
 
 限制：Bot API 上传单文件 ≤50MB。能预览的尽量预览：HEIC 与超标大图自动
-转码/压缩为 ≤10MB JPEG 走相册（依赖 Pillow/pillow-heif，缺失或失败则
-回退按文件发送）；>50MB 视频在本机有 ffmpeg 时压到 ~49MB 再发，没有则
+转码/压缩为 ≤10MB JPEG 走相册（HEIC 两路：pillow-heif 优先，缺失时回退
+libheif 自带的 heif-convert CLI——Termux `pkg install libheif` 即可获得，
+都缺才按文件发送）；>50MB 视频在本机有 ffmpeg 时压到 ~49MB 再发，没有则
 维持超限跳过。Telegram 上的是浏览版，原始字节始终在本地 download/。
 超限走自建 telegram-bot-api（2GB）不在本脚本范围。
 """
@@ -141,27 +142,55 @@ def plan_uploads(files, document=False, size_of=os.path.getsize):
 # ---------------- 预览预处理（插在 collect 与 plan 之间） ----------------
 
 
-def _try_heic_to_jpeg(path, tmpdir):
-    """HEIC/HEIF → JPEG（Pillow + pillow-heif，惰性 import）。依赖缺失或解码失败返回 None。"""
+def _try_heic_to_jpeg(path, tmpdir, _run=subprocess.run):
+    """HEIC/HEIF → JPEG 预览转码。两条路：
+
+    1. Pillow + pillow-heif（桌面常规，惰性 import）；
+    2. libheif 自带的 heif-convert CLI 兜底——Termux 只要
+       `pkg install libheif` 即可获得，免去源码编译 pillow-heif；
+       pillow-heif 缺失或解码失败都会尝试 CLI。
+    两者都不可用/都失败返回 None（调用方维持 document 发送）。
+    """
+    stem = os.path.splitext(os.path.basename(path))[0]
+    out = os.path.join(tmpdir, stem + ".jpg")
     try:
         import pillow_heif
         from PIL import Image
     except ImportError:
-        logger.warning(
-            "HEIC 预览转码需要 pillow-heif（Termux 先 pkg install libheif 再 "
-            "pip install pillow-heif）；未安装，HEIC 按文件原样发送"
-        )
+        pillow_heif = None
+
+    if pillow_heif is not None:
+        try:
+            pillow_heif.register_heif_opener()
+            with Image.open(path) as img:
+                img.convert("RGB").save(out, format="JPEG", quality=95)
+            return out
+        except Exception:
+            logger.warning("HEIC 经 pillow-heif 转码失败，改试 heif-convert: %s", path)
+
+    if shutil.which("heif-convert"):
+        try:
+            proc = _run(
+                ["heif-convert", str(path), out], capture_output=True, timeout=60
+            )
+        except Exception:
+            proc = None
+        if (
+            proc is not None
+            and getattr(proc, "returncode", 1) == 0
+            and os.path.exists(out)
+            and os.path.getsize(out) > 0
+        ):
+            return out
+        logger.warning("heif-convert 转码失败，按文件原样发送: %s", path)
         return None
-    try:
-        pillow_heif.register_heif_opener()
-        stem = os.path.splitext(os.path.basename(path))[0]
-        out = os.path.join(tmpdir, stem + ".jpg")
-        with Image.open(path) as img:
-            img.convert("RGB").save(out, format="JPEG", quality=95)
-    except Exception:
-        logger.warning("HEIC 转码失败，按文件原样发送: %s", path)
-        return None
-    return out
+
+    logger.warning(
+        "HEIC 预览转码不可用：未装 pillow-heif，也未找到 heif-convert。"
+        "Termux 运行 pkg install libheif 即可获得 heif-convert（推荐，免编译）；"
+        "完整方案再补 pip install pillow-heif。未安装时 HEIC 按文件原样发送"
+    )
+    return None
 
 
 def _transcode_photo_if_needed(path, tmpdir):
@@ -296,7 +325,7 @@ def _prepare_one(path, tmpdir, _run=subprocess.run):
             return compressed, compressed
         return path, None
     if ext in (".heic", ".heif"):
-        converted = _try_heic_to_jpeg(path, tmpdir)
+        converted = _try_heic_to_jpeg(path, tmpdir, _run=_run)
         if converted is None:
             return path, None
         send, _temp = _transcode_photo_if_needed(converted, tmpdir)

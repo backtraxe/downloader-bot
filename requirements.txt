@@ -5,5 +5,6 @@ yt-dlp>=2026.8.19
 
 # 以下为可选依赖，装不上不影响核心下载功能：
 # Pillow>=10.0        # Termux 请用 pkg install python-pillow（PyPI 无 Android wheel）
-# pillow-heif>=1.0    # 仅 live_photo.py 转 HEIC 用；Termux 先 pkg install libheif 再 pip 安装
+# pillow-heif>=1.0    # live_photo.py（HEIC→JPG 打包）与 telegram/upload.py（HEIC 预览转码）共用。
+#                      # 缺失时 upload 回退 heif-convert CLI——Termux 仅 pkg install libheif 即可预览 HEIC
 

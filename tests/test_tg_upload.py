@@ -223,10 +223,11 @@ class TestUpload:
 
 
 class _Completed:
-    """假 subprocess 返回值。"""
+    """假 subprocess 返回值（returncode 缺省 0，模拟正常退出）。"""
 
-    def __init__(self, stdout=""):
+    def __init__(self, stdout="", returncode=0):
         self.stdout = stdout
+        self.returncode = returncode
 
 
 class TestPrepareOne:
@@ -262,14 +263,57 @@ class TestPrepareOne:
             again.verify()
 
     def test_heic_missing_deps_falls_back(self, tmp_path, monkeypatch, caplog):
-        # pillow_heif 导入失败 → 原样返回（维持 document 现状），日志给出安装提示
+        # pillow_heif 与 heif-convert 都不可用 → 原样返回（维持 document 现状），
+        # 日志给出安装提示；which 必须显式注入，用例才能离线不随宿主环境漂移
         monkeypatch.setitem(sys.modules, "pillow_heif", None)
+        monkeypatch.setattr("telegram.upload.shutil.which", lambda name: None)
         p = _touch(tmp_path / "a.heic", b"x")
         tmpdir = tmp_path / "t"
         tmpdir.mkdir()
         send, temp = _prepare_one(p, str(tmpdir))
         assert send == p and temp is None
         assert any("pillow-heif" in r.message for r in caplog.records)
+
+    def test_heic_heif_convert_cli_fallback(self, tmp_path, monkeypatch):
+        # pillow-heif 缺失时退而用 libheif 自带的 heif-convert CLI——
+        # Termux 一条 pkg install libheif 即可获得，免去源码装 pillow-heif
+        Image = pytest.importorskip("PIL.Image")
+        monkeypatch.setitem(sys.modules, "pillow_heif", None)
+        monkeypatch.setattr(
+            "telegram.upload.shutil.which",
+            lambda name: "/usr/bin/heif-convert" if name == "heif-convert" else None,
+        )
+        calls = []
+
+        def fake_run(argv, **_kwargs):
+            calls.append(argv)
+            Image.new("RGB", (64, 48), (10, 200, 30)).save(argv[2], format="JPEG")
+            return _Completed()
+
+        p = _touch(tmp_path / "a.heic", b"fake-heic-bytes")
+        tmpdir = tmp_path / "t"
+        tmpdir.mkdir()
+        send, temp = _prepare_one(str(p), str(tmpdir), _run=fake_run)
+        assert calls and calls[0][0] == "heif-convert"
+        assert calls[0][1] == str(p) and calls[0][2].endswith("a.jpg")
+        assert send.endswith("a.jpg") and temp == send
+
+    def test_heic_heif_convert_cli_failure_falls_back(self, tmp_path, monkeypatch):
+        # heif-convert 在场但转码失败（坏文件/非零退出）→ 维持 document 现状
+        monkeypatch.setitem(sys.modules, "pillow_heif", None)
+        monkeypatch.setattr(
+            "telegram.upload.shutil.which",
+            lambda name: "/usr/bin/heif-convert" if name == "heif-convert" else None,
+        )
+
+        def fake_run(argv, **_kwargs):
+            return _Completed(returncode=1)
+
+        p = _touch(tmp_path / "a.heic", b"x")
+        tmpdir = tmp_path / "t"
+        tmpdir.mkdir()
+        send, temp = _prepare_one(str(p), str(tmpdir), _run=fake_run)
+        assert send == p and temp is None
 
     def test_heic_converted_to_jpeg(self, tmp_path):
         Image = pytest.importorskip("PIL.Image")
