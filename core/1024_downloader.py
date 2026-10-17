@@ -1,5 +1,6 @@
 from .http_client import Session
 import glob
+import json
 import os
 import re
 import time
@@ -302,6 +303,31 @@ _LAZY_ATTRS = [
 ]
 
 
+def _iter_jsonld_media_urls(data):
+    """从 JSON-LD 结构化数据递归抽取 ImageObject/VideoObject 的媒体直链。
+
+    深度遍历 dict/list（含 @graph 嵌套），只认 schema.org 的 contentUrl
+    优先、url 兜底，且值必须是字符串——嵌套对象/空串不取，避免把网页
+    自身 URL 当媒体。yield (url, kind)。
+    """
+    stack = [data]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, list):
+            stack.extend(node)
+        elif isinstance(node, dict):
+            types = node.get("@type")
+            if isinstance(types, str):
+                types = [types]
+            types = {t.lower() for t in types} if isinstance(types, list) else set()
+            if types & {"imageobject", "videoobject"}:
+                value = node.get("contentUrl") or node.get("url")
+                if isinstance(value, str) and value.strip():
+                    kind = ".mp4" if "videoobject" in types else ".jpg"
+                    yield value.strip(), kind
+            stack.extend(v for v in node.values() if isinstance(v, (dict, list)))
+
+
 def collect_media_urls(soup, page_url):
     """按 DOM 顺序深度扫描媒体候选 URL，返回 [(url, 扩展名), ...]（保序去重）。
 
@@ -358,6 +384,47 @@ def collect_media_urls(soup, page_url):
                 full_url = normalize_url(bg_url, page_url)
                 if full_url.startswith("http"):
                     _add(full_url, guess_extension(full_url, default=".jpg"))
+
+    # 4. OpenGraph / Twitter meta：SPA 与图床站常把主图/主视频只放 meta 里
+    #    （gallery-dl 在 12+ 站点模块内联使用 og:image 兜底，验证过高价值，
+    #    这里作为 DOM 扫描之外的通用兜底补充；数值型 content 如
+    #    og:image:width 会被 http 前缀检查自然过滤）
+    for meta in soup.find_all("meta"):
+        key = meta.get("property") or meta.get("name") or ""
+        val = (meta.get("content") or "").strip()
+        is_media_key = (
+            key.startswith("og:image")
+            or key.startswith("og:video")
+            or key == "twitter:image"
+            or key == "twitter:player:stream"
+        )
+        # og 规范值应为绝对 URL；无斜杠的内容（og:image:width="1200" 等）
+        # 视为非媒体，避免被 normalize_url 拼成站内伪链接
+        if not val or "/" not in val or not is_media_key:
+            continue
+        full_url = normalize_url(val, page_url)
+        if not full_url.startswith("http"):
+            continue
+        if key.startswith("og:video") or key == "twitter:player:stream":
+            _add(full_url, ".mp4")
+        else:
+            _add(full_url, guess_extension(full_url, default=".jpg"))
+
+    # 5. JSON-LD 结构化数据：ImageObject/VideoObject 的 contentUrl
+    #    （schema.org；新闻/合集页常只在结构化数据里暴露主资源）
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string or "")
+        except (ValueError, TypeError):
+            continue  # 坏 JSON 直接跳过，不影响其余扫描
+        for media_url, kind in _iter_jsonld_media_urls(data):
+            full_url = normalize_url(media_url, page_url)
+            if full_url.startswith("http"):
+                if kind != ".mp4":
+                    # 图片按 URL 推断扩展名；视频固定 .mp4（落盘会再按
+                    # Content-Type 校正，这里只是默认槽位）
+                    kind = guess_extension(full_url, default=".jpg")
+                _add(full_url, kind)
 
     return items
 

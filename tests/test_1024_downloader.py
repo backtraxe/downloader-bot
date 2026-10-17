@@ -2,6 +2,7 @@
 """1024_downloader.py 纯函数/可注入会话单元测试（无网络依赖）"""
 
 import importlib
+import json
 import os
 
 import pytest
@@ -330,6 +331,78 @@ class TestCollectMediaUrls:
         )
         items = mod.collect_media_urls(soup, "https://a.com/page")
         assert items == [("https://a.com/photo.jpg", ".jpg")]
+
+    # ---- og:meta / JSON-LD 兜底（2026-10 新增）----
+
+    def test_og_meta_image_and_video(self):
+        # OpenGraph/Twitter meta：SPA 与图床站常把主图/主视频只放 meta 里
+        # （gallery-dl 在 12+ 站点模块内联使用 og:image 兜底，验证过高价值）
+        soup = self._soup(
+            "<html><head>"
+            '<meta property="og:image" content="https://a.com/cover.jpg">'
+            '<meta property="og:video:secure_url" content="https://a.com/clip.mp4">'
+            '<meta property="og:image:width" content="1200">'
+            '<meta name="twitter:image" content="https://a.com/tw.jpg">'
+            "</head><body></body></html>"
+        )
+        items = mod.collect_media_urls(soup, "https://a.com/page")
+        assert ("https://a.com/cover.jpg", ".jpg") in items
+        assert ("https://a.com/clip.mp4", ".mp4") in items
+        assert ("https://a.com/tw.jpg", ".jpg") in items
+        assert len(items) == 3  # og:image:width 的数值型 content 被过滤
+
+    def test_og_meta_dedup_with_dom(self):
+        # og:image 与正文 img 同 URL：保持 DOM 顺序只留一份
+        soup = self._soup(
+            '<img src="https://a.com/1.jpg">'
+            '<meta property="og:image" content="https://a.com/1.jpg">'
+        )
+        assert mod.collect_media_urls(soup, "https://a.com/page") == [
+            ("https://a.com/1.jpg", ".jpg")
+        ]
+
+    def test_json_ld_image_and_video(self):
+        # schema.org 结构化数据：ImageObject/VideoObject 的 contentUrl
+        ld = json.dumps(
+            {
+                "@graph": [
+                    {"@type": "ImageObject", "contentUrl": "https://a.com/x/img.png"},
+                    {
+                        "@type": "VideoObject",
+                        "contentUrl": "https://a.com/x/clip.mp4",
+                        "url": "https://a.com/page",  # 页面自身 URL：contentUrl 优先，不重复取
+                    },
+                ]
+            }
+        )
+        soup = self._soup(f'<script type="application/ld+json">{ld}</script>')
+        items = mod.collect_media_urls(soup, "https://a.com/page")
+        assert ("https://a.com/x/img.png", ".png") in items
+        assert ("https://a.com/x/clip.mp4", ".mp4") in items
+        assert len(items) == 2
+
+    def test_json_ld_broken_script_ignored(self):
+        # 坏 JSON 的 ld+json script 直接跳过，不影响其余扫描
+        soup = self._soup(
+            '<script type="application/ld+json">{"@type": "ImageObject" oops</script>'
+            '<img src="https://a.com/1.jpg">'
+        )
+        items = mod.collect_media_urls(soup, "https://a.com/page")
+        assert [u for u, _ in items] == ["https://a.com/1.jpg"]
+
+    def test_json_ld_url_dict_not_media(self):
+        # url 字段为嵌套对象（非字符串）不取——避免把网页自身 URL 当媒体
+        ld = json.dumps(
+            {
+                "@type": "VideoObject",
+                "contentUrl": "https://a.com/v.mp4",
+                "url": {"@id": "page-identity"},
+            }
+        )
+        soup = self._soup(f'<script type="application/ld+json">{ld}</script>')
+        assert mod.collect_media_urls(soup, "https://a.com/page") == [
+            ("https://a.com/v.mp4", ".mp4")
+        ]
 
 
 # ---------------- build_media_tasks ----------------
