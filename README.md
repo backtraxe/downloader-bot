@@ -172,6 +172,19 @@ iOS 没有 DevTools，也**无法**用“快捷指令”读取 Safari 的 Cookie
 - 小红书除登录外，链接本身仍需带 `xsec_token`（2026-10 起裸 `explore/<id>` 链接一律 404，与 Cookie 无关）；从 App 分享的短链自带该参数。
 - bilibili 的 Cookie 仅在下不了高清/大会员画质时才需要更新，普通视频可空。
 
+### 检查 Cookie 是否齐全（cookie_check.py)
+
+导入后或下载失败排查时，一条命令体检（纯离线，只看键名不看值）：
+
+```bash
+python -m core.tools.cookie_check                       # 检查 cookies/ 下所有已存在的 .txt
+python -m core.tools.cookie_check douyin xiaohongshu   # 只查指定站点
+```
+
+- **douyin**：检查 `UIFID`（或 `UIFID_TEMP`）与 `ttwid`/`sessionid`（视频门禁）是否齐全；`msToken` 存在会提示"将被优先使用"
+- **xiaohongshu**：检查 `a1`（核心身份键，正常约 52 位）与 `webId`/`web_session`
+- 其余站点只报告文件存在性；有明确缺口（✗）时退出码为 1，可直接用于脚本判断
+
 ### 手机号验证码半自动登录（cookie_login.py，可选）
 
 不想手动导 Cookie 时，用 Playwright 半自动登录刷新（需 `pip install playwright && playwright install chromium`）：
