@@ -53,6 +53,12 @@ def resolve_short_link(url):
     解析器可正常工作。此函数在交给 yt-dlp 前先用 curl 跟一遍重定向，
     拿到最终直链，避免 yt-dlp 卡在 DNS 解析阶段。
 
+    设计注意：故意不带 Cookie、单独一次性展开——与后续"带 Cookie 正式
+    请求目标页"是两步两请求，勿在重构时合并成"带 Cookie 跟 302 到最终页"
+    的单请求：跨域跳转时 curl_cffi 不会把 Cookie 头带给跳转目标域，
+    社区实测该单请求路径解析失败（XHS-Downloader 2026-10 开放 issue
+    #495 即此坑）。两步式既拿到直链又不泄 Cookie。
+
     非短链直接原样返回，不产生额外请求。
     """
     domain = urlparse(url).netloc.lower()
