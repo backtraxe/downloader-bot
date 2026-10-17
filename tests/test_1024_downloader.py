@@ -484,3 +484,47 @@ class TestFetchPage:
         sess = _FakeSession([_FakeResp(404)])
         assert mod.fetch_page(sess, "http://x", {}) is None
         assert sess.calls == 1
+
+
+# ---------------- 固定 UA 策略 ----------------
+
+# 独立来源的标准 Chrome110 UA 字面值（与 _UA150 的写法风格一致，补丁位归零）
+_EXPECTED_CHROME110_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+)
+
+
+class TestFixedChrome110UA:
+    """1024 对外请求的 UA 必须是固定 Chrome110 串：fake_useragent 上游仓库已
+    归档、随机 UA 数据冻结在 Chrome≤133，随机 UA 与 impersonate="chrome110"
+    的 TLS 指纹版本错配是本仓库已实证的反爬风险（xhs/douyin 因同类错配被
+    302 /login、验证码中间页拦过）。页面与媒体请求统一用固定 UA。"""
+
+    def test_page_headers_ua_fixed(self):
+        first = mod.get_headers()["User-Agent"]
+        # 多次调用结果不变：UA 不再随机
+        assert all(mod.get_headers()["User-Agent"] == first for _ in range(10)), (
+            "UA 应为固定值，不应随调用随机变化"
+        )
+        # 与模块常量、标准 Chrome110 串一致
+        assert first == mod._UA110
+        assert first == _EXPECTED_CHROME110_UA
+        assert "Chrome/110" in first
+
+    def test_download_file_sends_fixed_ua(self, tmp_path, monkeypatch):
+        # 媒体下载请求（img_headers）同样发固定 Chrome110 UA，与页面请求一致
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        seen = {}
+
+        class S:
+            def get(self, url, **kw):
+                seen.update(kw.get("headers") or {})
+                return _FakeImageResp(b"x" * 30000)
+
+        target = str(tmp_path / "001.jpg")
+        result = mod.download_file(S(), "http://img/001.jpg", target, "http://page")
+        assert "[成功]" in result
+        assert seen["User-Agent"] == _EXPECTED_CHROME110_UA
+        assert seen["User-Agent"] == mod.get_headers()["User-Agent"]
+        assert "Chrome/110" in seen["User-Agent"]

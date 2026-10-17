@@ -15,7 +15,6 @@ from .utils import (
     extract_urls,
     get_image_dimensions,
     guess_extension,
-    init_useragent,
     is_html_content,
     normalize_url,
     sanitize_filename,
@@ -27,8 +26,15 @@ logger = setup_logging()
 
 DOWNLOAD_DIR = "download"
 
-# 初始化 fake_useragent
-ua, _FALLBACK_UA = init_useragent(logger)
+# UA 与 TLS 指纹必须对齐同一 Chrome 大版本（对齐 xhs/douyin 的"固定 UA+指纹"模式）：
+# fake_useragent 上游仓库已归档、随机 UA 数据冻结在 Chrome≤133，随机 UA 与
+# impersonate 指纹版本错配是本仓库已实证的反爬风险（xhs/douyin 因同类错配被
+# 302 /login、验证码中间页拦过），因此弃用随机 UA，统一用固定 Chrome110 UA。
+_IMPERSONATE = "chrome110"
+_UA110 = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
+)
 
 # 装饰性资源过滤：logo/头像/二维码/表情包/备案图标等站点装饰图
 # 按文件名关键词（下载前）与体积阈值（下载后）双重过滤
@@ -62,10 +68,9 @@ def _is_decorative_name(filename):
 
 
 def get_headers():
-    """生成随机请求头，UA 不可用时降级固定值"""
-    user_agent = ua.random if ua else _FALLBACK_UA
+    """生成页面请求头：UA 与 chrome110 TLS 指纹严格对齐，固定不变"""
     return {
-        "User-Agent": user_agent,
+        "User-Agent": _UA110,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     }
@@ -91,7 +96,7 @@ def fetch_page(session, url, headers, max_attempts=3):
     for attempt in range(1, max_attempts + 1):
         try:
             resp = session.get(
-                url, headers=headers, timeout=15, impersonate="chrome110"
+                url, headers=headers, timeout=15, impersonate=_IMPERSONATE
             )
         except Exception as e:
             if attempt < max_attempts:
@@ -147,9 +152,9 @@ def download_file(session, url, filepath, page_url, force=False):
     if not force and existing:
         return f"  [跳过] {os.path.basename(filepath)} 已存在，无需重复下载"
 
-    # 专门为图片下载准备的仿真请求头
+    # 专门为图片下载准备的仿真请求头（UA 与页面请求同一固定 Chrome110 串）
     img_headers = {
-        "User-Agent": _FALLBACK_UA,
+        "User-Agent": _UA110,
         "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Referer": page_url,  # 关键：告诉图床我是从原网页过来的（破解防盗链）
@@ -164,7 +169,11 @@ def download_file(session, url, filepath, page_url, force=False):
 
         # 始终传 impersonate；http_client 在 curl_cffi 不可用时用系统 curl 模拟
         r = session.get(
-            url, headers=img_headers, stream=True, timeout=30, impersonate="chrome110"
+            url,
+            headers=img_headers,
+            stream=True,
+            timeout=30,
+            impersonate=_IMPERSONATE,
         )
         r.raise_for_status()
 

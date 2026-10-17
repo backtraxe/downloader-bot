@@ -30,7 +30,7 @@ conftest.py            # 让裸 pytest 也能从仓库根导入两个包
 ruff.toml              # ruff 配置：lint 只选 F/E9/W/B bug 类规则；整体排除 core/douyin_sign/
 setup_termux.sh        # Termux 首次使用配置脚本（仅 Termux 环境）
 tests/                 # pytest 单元测试（不联网），文件名与模块一一对应
-requirements.txt       # 依赖清单（requests / fake_useragent / beautifulsoup4 / curl_cffi / yt-dlp）
+requirements.txt       # 依赖清单（requests / beautifulsoup4 / curl_cffi / yt-dlp）
 cookies/               # 各站点 cookie 文件，cookies/<站点名>.txt（已 gitignore）
 download/              # 输出目录，download/<站点>[/<作者>]/<标题>[_<ID>]/ 或 <标题>.<ext>（已 gitignore）
 config.json            # 仓库统一配置（已 gitignore）；旧版 telegram.json 仍可被兜底读取
@@ -83,7 +83,7 @@ ruff format .                                        # 代码格式化（black �
 
 **`core/http_client.py`（HTTP 统一封装）。** 提供 `Session`（`get` / `post_files` multipart 上传）和模块级 `get()`。curl_cffi 可用时委托给它；不可用时（Termux 上编译扩展常因 Python ABI 不匹配加载失败）降级为系统 `curl` 命令（subprocess），返回兼容 requests 接口的 `CurlResponse`（`text`/`headers`/`iter_content`/`raise_for_status`/`json`）。系统 curl 不做 JA3 伪装，只加 `--http2`（硬编码 cipher/curve 反而会 TLS 握手失败）。`get` 被 `1024_downloader`、`xhs_downloader`、`douyin_downloader` 和 `downloader.py` 的短链展开共用；`post_files` 供 `telegram/upload.py` 走 Telegram Bot API（curl_cffi **不支持 requests 式 `files=`**，须用 CurlMime 读文件入内存逐段拼装，曾致全量上传失败 "files is not supported"；降级路径翻译为 `curl -F field=@path`）。降级路径用 `curl -L` 跟随重定向时，`_parse_response_blocks` 逐跳累积中间块的 Location 保存为 `CurlResponse.url`（effective_url）——丢失它会让 `resolve_short_link` 永远判断"无重定向"、重试全徒劳，Termux 上的真实故障（已修）。
 
-**`core/utils.py`（共用工具）。** `setup_logging`（幂等）、`init_useragent`（fake_useragent 随机 UA，多采样探测不可用时降级固定 Chrome UA；仅 1024_downloader 使用）、`extract_urls`（从粘贴的分享文案中提取 URL，剔除尾部中文/标点）、`sanitize_filename`、`build_download_dir`（作者非空才加层，防御目录穿越）、`unique_path`（`O_CREAT|O_EXCL` 原子占位去重，并发不撞名）、`guess_extension`、`normalize_url`、`is_html_content`、`normalize_xhs_state_json`、`cookie_header_to_netscape`（把 `Cookie:` 请求头字符串转成 yt-dlp 可读的 Netscape 文件）、`cookie_text_to_header`（逆操作：Netscape 文件/请求头整段统一转回 `Cookie:` 头，douyin_downloader 用）。
+**`core/utils.py`（共用工具）。** `setup_logging`（幂等）、`extract_urls`（从粘贴的分享文案中提取 URL，剔除尾部中文/标点）、`sanitize_filename`、`build_download_dir`（作者非空才加层，防御目录穿越）、`unique_path`（`O_CREAT|O_EXCL` 原子占位去重，并发不撞名）、`guess_extension`、`normalize_url`、`is_html_content`、`normalize_xhs_state_json`、`cookie_header_to_netscape`（把 `Cookie:` 请求头字符串转成 yt-dlp 可读的 Netscape 文件）、`cookie_text_to_header`（逆操作：Netscape 文件/请求头整段统一转回 `Cookie:` 头，douyin_downloader 用）。
 
 **`core/tools/live_photo.py`（实况后处理，独立模块）。** 把小红书实况对儿（`001.heic`+`001.mp4`）打包为平台可用格式：`--android`（默认）把 HEIC 转 JPEG（pillow-heif，可选依赖——无 HEIC 时不需安装）+ MP4 mux 成 Motion Photo 单文件（`<stem>_motion.jpg`，双写 Camera + MicroVideo 两种 XMP，XMP 段必须紧跟 JPEG SOI 之后）；`--ios` 用 exiftool 写配对 ContentIdentifier 输出 `<stem>_ios.<原图扩展名>` + `<stem>_ios.mov`。华为的私有格式不支持。**注意**：被下载器完全解耦——不被 downloader/1024/xhs 任何模块 import，独立 CLI 使用。
 
@@ -94,7 +94,7 @@ ruff format .                                        # 代码格式化（black �
 - 4 空格缩进；函数 `snake_case`；模块级常量 `UPPER_CASE`。
 - **注释和用户可见消息用中文**，修改既有代码时沿用。
 - 并发维持 `max_workers=5`，避免触发 IP 熔断。
-- **UA 策略分两类**：1024_downloader 用 `init_useragent` 随机 UA（fake_useragent + 固定 Chrome 兜底）；xhs/douyin 用与 `impersonate` 指纹版本**严格对齐的固定 UA**（当前 Chrome150）——随机 UA 与 TLS 指纹版本不一致会被小红书 302 到 /login、概率性触发抖音验证码中间页，不要改回随机 UA。
+- **UA 策略（全仓统一固定 UA）**：所有模块一律用与 `impersonate` 指纹版本**严格对齐的固定 UA**——xhs/douyin 当前 Chrome150（`_UA150`），1024_downloader 当前 Chrome110（`_UA110`，页面与媒体请求同一串）。不用随机 UA：fake_useragent 上游仓库已归档、UA 数据冻结在 Chrome≤133（2026-10 实查），随机 UA 与 TLS 指纹版本不一致会被小红书 302 到 /login、概率性触发抖音验证码中间页，不要改回随机 UA（`utils.init_useragent` 已删除，requirements 的 fake_useragent 随之移除）。
 - 站点识别一律走 `sites.get_site_name`，不要在各脚本里重复写域名判断。
 - 下载目录一律经 `utils.build_download_dir` 构造，保证"有作者加层、无作者退化"口径一致。
 - 文件名冲突用 `unique_path` 原子去重，绝不覆盖已有文件；重复下载同一链接时目标序号文件已存在直接跳过（`glob(stem + ".*")` 幂等判断，`.part` 残留不算已下载），不产生 `_1` 副本。统一入口 `--force`/`-f` 可跳过幂等判断强制重下：`dispatch_url(url, force=)` 逐层下传到各后端 `download_file`（force 走 `.part` 临时文件 + `os.replace` 原子替换，失败不破坏旧文件）；yt-dlp 后端 force 时在 ydl_opts 加 `overwrites: True`。

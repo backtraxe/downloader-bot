@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""core 各下载模块共用的工具函数：UA 初始化、URL 归一化、文件名清洗、
-原子去重、扩展名推断、日志配置、cookie 格式转换等。
+"""core 各下载模块共用的工具函数：URL 归一化、文件名清洗、原子去重、
+扩展名推断、日志配置、cookie 格式转换等。
 
 集中在此以避免各模块各写一份且实现不一致。"""
 
@@ -55,11 +55,6 @@ _URL_TRAILING_CHARS = re.compile(
     r"[\u3000-\u9fff\uff00-\uffef，。、；：！？）》」』）\"'\]\]>}]+$"
 )
 
-_DEFAULT_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
-
 
 def setup_logging(level: int = logging.INFO) -> logging.Logger:
     """配置根日志格式，返回 logger。幂等——重复调用不会叠加 handler。"""
@@ -76,34 +71,6 @@ def setup_logging(level: int = logging.INFO) -> logging.Logger:
     root.addHandler(handler)
     root.setLevel(level)
     return logging.getLogger("downloader")
-
-
-def init_useragent(logger: logging.Logger):
-    """初始化 fake_useragent。若随机 UA 不可用（数据加载失败 / fallback），
-    返回 (ua_obj_or_None, fallback_ua_string)。调用方应优先用 ua.random，
-    None 时回退到 fallback_ua。不静默失败——会记录 warning。"""
-    try:
-        from fake_useragent import UserAgent
-    except ImportError:
-        logger.warning("fake_useragent 未安装，使用固定 User-Agent")
-        return None, _DEFAULT_UA
-
-    try:
-        # fake_useragent 2.x：os 参数是可迭代类型，内置数据里 OS 值为 "Windows"（首字母大写）。
-        # 传小写字符串 "windows" 会导致过滤后为空、ua.random 恒等于 fallback。
-        ua = UserAgent(os=["Windows"])
-        # 探测：连续取若干次，若全等于 fallback 则判定数据不可用，降级固定 UA。
-        # 用多次采样避免极小概率恰好抽到 fallback 造成误判。
-        samples = [ua.random for _ in range(5)]
-        if not any(s and s != ua.fallback for s in samples):
-            logger.warning(
-                "fake_useragent 随机 UA 不可用（数据加载失败），降级为固定 UA"
-            )
-            return None, _DEFAULT_UA
-        return ua, _DEFAULT_UA
-    except Exception as e:  # noqa: BLE001 初始化失败需兜底
-        logger.warning("fake_useragent 初始化失败，降级为固定 UA。错误: %s", e)
-        return None, _DEFAULT_UA
 
 
 def normalize_url(url, page_url: str) -> str:

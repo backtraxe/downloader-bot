@@ -1,5 +1,4 @@
 requests>=2.32
-fake_useragent>=2.2
 beautifulsoup4>=4.12
 curl_cffi>=0.15  # Termux 装不上不影响：http_client 有系统 curl 降级
 yt-dlp>=2026.8.19
