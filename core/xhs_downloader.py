@@ -58,7 +58,13 @@ def ensure_https(url):
 
 
 def _is_transient_error(err):
-    """判断是否为值得重试的瞬时网络错误（DNS 解析失败、超时、连接重置等）。"""
+    """判断是否为值得重试的瞬时网络错误（DNS 解析失败、超时、连接重置等）。
+
+    必须兼容两族消息格式：requests/urllib3 系（历史关键字）与 curl 系——
+    http_client 主路径是 curl_cffi 0.16+，异常为 curl 错误码格式
+    （"timed out" 带空格、不含 "timeout" 字样），历史关键字一个都
+    对不上，导致超时/DNS 失败全部不重试、一次失败即终止
+    （2026-10 线上案例：小红书下载报 "failed to perform after 15002 ms"）。"""
     err_str = str(err).lower()
     keywords = (
         "no address associated with hostname",  # DNS 解析失败
@@ -71,6 +77,14 @@ def _is_transient_error(err):
         "read timed out",  # 读取超时
         "connect timeout",  # 连接超时
         "timeout",  # 通用超时
+        # curl 系：curl_cffi 0.16+（http_client 主路径）与系统 curl 降级路径
+        "failed to perform",  # curl_cffi RequestsError 消息前缀，各版本格式不一，最稳的识别锚点
+        "timed out",  # curl 错误 28：Connection/Operation timed out（与 "timeout" 是不同子串）
+        "could not resolve host",  # curl 错误 6：DNS 解析失败
+        "could not connect",  # curl 错误 7：无法连接
+        "connection was reset",  # curl 错误 56：Connection was reset by peer
+        "recv failure",  # curl 错误 56：接收中断/重置
+        "请求超时",  # http_client 降级路径 subprocess 超时消息 "curl 请求超时（Ns）"
     )
     return any(kw in err_str for kw in keywords)
 

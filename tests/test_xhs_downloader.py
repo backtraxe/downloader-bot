@@ -205,6 +205,68 @@ class TestIsTransientError:
         err = Exception("403 Client Error: Forbidden")
         assert _is_transient_error(err) is False
 
+    # ---- curl 系消息格式（curl_cffi 0.16.x 实测，2026-10）----
+    # http_client 主路径已迁移 curl_cffi，异常是 curl 错误码格式，与
+    # requests 系消息完全不同，必须能识别为瞬时并触发重试。
+
+    def test_curl_cffi_connect_timeout_is_transient(self):
+        from core.xhs_downloader import _is_transient_error
+
+        # curl_cffi 0.16.3 真实消息（curl 错误码 28，注意是 "timed out" 带空格）
+        err = Exception(
+            "Failed to perform, curl: (28) Connection timed out after 3002 "
+            "milliseconds. See https://curl.se/libcurl/c/libcurl-errors.html "
+            "first for more details."
+        )
+        assert _is_transient_error(err) is True
+
+    def test_curl_cffi_read_timeout_is_transient(self):
+        from core.xhs_downloader import _is_transient_error
+
+        # curl_cffi 0.16.3 真实消息：连接成功但读取超时（下载大文件场景）
+        err = Exception(
+            "Failed to perform, curl: (28) Operation timed out after 2001 "
+            "milliseconds with 0 bytes received. See "
+            "https://curl.se/libcurl/c/libcurl-errors.html first for more details."
+        )
+        assert _is_transient_error(err) is True
+
+    def test_curl_cffi_dns_failure_is_transient(self):
+        from core.xhs_downloader import _is_transient_error
+
+        # curl_cffi 0.16.3 真实消息（curl 错误码 6）
+        err = Exception(
+            "Failed to perform, curl: (6) Could not resolve host: "
+            "no-such-host.example. See https://curl.se/libcurl/c/libcurl-errors.html "
+            "first for more details."
+        )
+        assert _is_transient_error(err) is True
+
+    def test_curl_cffi_bare_perform_error_is_transient(self):
+        from core.xhs_downloader import _is_transient_error
+
+        # 旧格式的 curl_cffi 消息除前缀外无其他可识别子串
+        # （线上真实案例：小红书下载报 "failed to perform after 15002 ms" 一次失败即终止）
+        err = Exception("Failed to perform after 15002 ms")
+        assert _is_transient_error(err) is True
+
+    def test_curl_fallback_timeout_is_transient(self):
+        from core.xhs_downloader import _is_transient_error
+
+        # http_client 系统curl降级路径（Termux）真实消息
+        err = Exception(
+            "curl 失败（返回码 28）：curl: (28) Operation timed out after "
+            "3006 milliseconds with 0 bytes received"
+        )
+        assert _is_transient_error(err) is True
+
+    def test_curl_fallback_subprocess_timeout_is_transient(self):
+        from core.xhs_downloader import _is_transient_error
+
+        # http_client 降级路径 subprocess 超时消息
+        err = Exception("curl 请求超时（15s）：https://example.com/x")
+        assert _is_transient_error(err) is True
+
 
 # ---------------- extract_image_url ----------------
 
