@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 
 from .sites import get_site_name
+from .result import DownloadResult, DownloadStatus, result_from_counts
 from .utils import (
     build_download_dir,
     extract_url_numeric_id,
@@ -66,6 +67,32 @@ def _is_decorative_name(filename):
         re.search(rf"(?:^|[\W_]){re.escape(kw)}(?:[\W_]|$)", low)
         for kw in _DECORATIVE_KEYWORDS
     )
+
+
+# <a href> 指向的“伪媒体链接”：URL 以 .jpg/.png 结尾，但实际是网页。
+# 典型是 MediaWiki 的 /wiki/File:Example.jpg 与 /w/index.php?title=...，
+# 下载回来是 HTML，既浪费请求又会被误报为“防火墙拦截”。
+_PAGE_PATH_HINTS = ("/wiki/", "/w/index.php")
+
+
+def _looks_like_page_url(url):
+    """判断 A 标签里的媒体后缀 URL 是否更像网页而非媒体直链。
+
+    只用于 <a href> 候选：网页路由常以媒体扩展名结尾，但下载只会得到
+    HTML。规则保持通用，不绑定具体站点：
+    - 路径含 /wiki/ 或 /w/index.php（MediaWiki 条目/动作页）
+    - 末段含命名空间冒号（File:xxx.jpg、Special:xxx.png）
+    - 查询串带 title=/returnto=（动作页）
+    """
+    parsed = urlparse(url)
+    path = unquote(parsed.path).lower()
+    if any(hint in path for hint in _PAGE_PATH_HINTS):
+        return True
+    last = path.rsplit("/", 1)[-1]
+    if ":" in last:
+        return True
+    query = unquote(parsed.query).lower()
+    return "title=" in query or "returnto=" in query
 
 
 def get_headers():
@@ -138,6 +165,40 @@ def fetch_page(session, url, headers, max_attempts=3):
     return None
 
 
+def _skip_marker_path(filepath):
+    """装饰图跳过标记路径：.<序号>.skip，与媒体文件同目录。
+
+    隐藏文件不会被 telegram 的 snapshot_tree 与 upload 的 collect_media
+    看到（两者都过滤 . 开头），因此不会误当产物回传；内容存原始 URL，
+    用于区分“同一序号换了新图”时是否还能沿用旧的跳过结论。
+    """
+    stem = os.path.splitext(os.path.basename(filepath))[0]
+    return os.path.join(os.path.dirname(filepath), f".{stem}.skip")
+
+
+def _read_skip_marker(filepath):
+    try:
+        with open(_skip_marker_path(filepath), encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _write_skip_marker(filepath, url):
+    try:
+        with open(_skip_marker_path(filepath), "w", encoding="utf-8") as f:
+            f.write(url)
+    except OSError:
+        logger.warning("写入装饰图跳过标记失败: %s", _skip_marker_path(filepath))
+
+
+def _clear_skip_marker(filepath):
+    try:
+        os.remove(_skip_marker_path(filepath))
+    except OSError:
+        pass
+
+
 def download_file(session, url, filepath, page_url, force=False):
     """单文件下载逻辑，增加防盗链绕过。文件名冲突时原子去重，绝不覆盖；
     下载后按 Content-Type 校正扩展名，避免名实不符。
@@ -152,6 +213,15 @@ def download_file(session, url, filepath, page_url, force=False):
     existing = [p for p in glob.glob(stem + ".*") if not p.endswith(".part")]
     if not force and existing:
         return f"  [跳过] {os.path.basename(filepath)} 已存在，无需重复下载"
+
+    # 装饰图被删除后没有产物可供 existing 判断；用隐藏标记记住原 URL，
+    # 避免同一页面每次重跑都重新下载几十张 120px 图标。
+    marker_url = _read_skip_marker(filepath)
+    if not force and marker_url == url:
+        return f"  [跳过] {os.path.basename(filepath)} 此前已判定为装饰图，无需重复下载"
+    if not force and marker_url and marker_url != url:
+        # 序号被新图复用：旧标记失效，重新判定
+        _clear_skip_marker(filepath)
 
     # 专门为图片下载准备的仿真请求头（UA 与页面请求同一固定 Chrome110 串）
     img_headers = {
@@ -181,7 +251,10 @@ def download_file(session, url, filepath, page_url, force=False):
         # 验证一下下载下来的到底是不是真实图片
         content_type = r.headers.get("Content-Type", "")
         if is_html_content(content_type):
-            return f"  [失败] {os.path.basename(filepath)} 被防火墙拦截 (返回了HTML)"
+            return (
+                f"  [失败] {os.path.basename(filepath)} "
+                "返回 HTML 页面（非媒体直链或被风控拦截）"
+            )
 
         # 按 URL 后缀 + Content-Type 校正扩展名，避免 png/webp 被误存成 .jpg
         ext = guess_extension(url, content_type, default=".jpg")
@@ -210,14 +283,17 @@ def download_file(session, url, filepath, page_url, force=False):
             if dims is not None:
                 if min(dims) < MIN_IMAGE_DIMENSION:
                     os.remove(safe_path)
+                    _write_skip_marker(filepath, url)
                     return (
                         f"  [跳过] {os.path.basename(safe_path)} "
                         f"尺寸 {dims[0]}x{dims[1]} 过小，判定为装饰图"
                     )
             elif os.path.getsize(safe_path) < MIN_IMAGE_BYTES:
                 os.remove(safe_path)
+                _write_skip_marker(filepath, url)
                 return f"  [跳过] {os.path.basename(safe_path)} 体积过小，判定为装饰图"
 
+        _clear_skip_marker(filepath)
         return f"  [成功] -> {os.path.basename(safe_path)}"
     except Exception as e:
         return f"  [失败] {os.path.basename(filepath)} 报错: {e}"
@@ -365,13 +441,20 @@ def collect_media_urls(soup, page_url):
     # 2. 扫描包裹媒体的 A 标签 (href 直链)
     for a_tag in soup.find_all("a"):
         href = a_tag.get("href", "")
-        if href and any(
-            href.lower().endswith(ext)
+        if not href:
+            continue
+        # 只看 URL 路径后缀：?image=foo.jpg 这类查询参数不是直链。
+        # 再排除 /wiki/File:xxx.jpg 这类“以媒体后缀结尾的网页”，
+        # 否则下载回来是 HTML，纯属浪费请求。
+        href_path = urlparse(href).path.lower()
+        if not any(
+            href_path.endswith(ext)
             for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".mp4"]
         ):
-            full_url = normalize_url(href, page_url)
-            if full_url.startswith("http"):
-                _add(full_url, guess_extension(full_url, default=".jpg"))
+            continue
+        full_url = normalize_url(href, page_url)
+        if full_url.startswith("http") and not _looks_like_page_url(full_url):
+            _add(full_url, guess_extension(full_url, default=".jpg"))
 
     # 3. 扫描 CSS 行内样式中的背景图 (background-image)
     for tag in soup.find_all(style=True):
@@ -441,7 +524,7 @@ def build_media_tasks(media_items, base_path):
     return tasks
 
 
-def extract_general_media(url, force=False):
+def extract_general_media(url, force=False) -> DownloadResult:
     """深度解析并下载静态网站的隐藏媒体文件。
     force=True（--force）时强制重下，覆盖已存在的旧产物。"""
     start_time = time.time()
@@ -453,7 +536,8 @@ def extract_general_media(url, force=False):
     response = fetch_page(session, url, headers)
     if response is None:
         logger.error("获取页面失败（耗时 %.1f 秒）", time.time() - start_time)
-        return
+        session.close()
+        return DownloadResult(DownloadStatus.FAILED, "获取页面失败")
 
     soup = BeautifulSoup(response.text, "html.parser")
 
@@ -477,11 +561,13 @@ def extract_general_media(url, force=False):
         logger.error(
             "深度扫描后依然没有发现媒体文件。（耗时 %.1f 秒）", time.time() - start_time
         )
-        return
+        session.close()
+        return DownloadResult(DownloadStatus.NO_MEDIA, "深度扫描后没有发现媒体文件")
 
     logger.info("深度扫描完成！共发现 %d 个媒体文件，开始下载...", len(media_items))
 
     download_tasks = build_media_tasks(media_items, base_path)
+    downloaded = skipped = failed = filtered = 0
 
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = [
@@ -490,11 +576,37 @@ def extract_general_media(url, force=False):
         ]
 
         for future in as_completed(futures):
-            logger.info("%s", future.result())
+            result = future.result()
+            logger.info("%s", result)
+            if result.startswith("  [失败]"):
+                failed += 1
+            elif result.startswith("  [跳过]"):
+                # “已存在”是重复链接；其余 [跳过] 是装饰图/过小被过滤
+                if "已存在，无需重复下载" in result:
+                    skipped += 1
+                else:
+                    filtered += 1
+            else:
+                downloaded += 1
 
     elapsed = time.time() - start_time
-    logger.info("📁 保存目录: %s", os.path.abspath(base_path))
+    kept = [
+        name
+        for name in os.listdir(base_path)
+        if not name.startswith(".")
+        and not name.endswith(".part")
+        and os.path.isfile(os.path.join(base_path, name))
+    ]
+    if kept:
+        logger.info("📁 保存目录: %s", os.path.abspath(base_path))
+    else:
+        logger.warning(
+            "未保留任何媒体文件（全部为装饰图或下载失败）：%s",
+            os.path.abspath(base_path),
+        )
     logger.info("该网页媒体下载任务完成！（耗时 %.1f 秒）", elapsed)
+    session.close()
+    return result_from_counts(downloaded, skipped, failed, filtered)
 
 
 def main():

@@ -25,6 +25,7 @@ from .sites import (
     cookie_file_for,
     get_site_name,
 )
+from .result import DownloadResult, DownloadStatus
 from .utils import cookie_text_to_header, extract_urls, sanitize_filename, setup_logging
 from urllib.parse import urljoin, urlparse
 
@@ -258,8 +259,24 @@ def resolve_short_link_with_retry(url, attempts=3):
     return url
 
 
+def _as_result(value, source):
+    """把后端返回值归一为 DownloadResult。
+
+    正式后端都返回 DownloadResult；bool/None 仅为兼容旧调用或测试桩。
+    None 视为失败而不是成功：静默失败正是本次要修的问题。
+    """
+    if isinstance(value, DownloadResult):
+        return value
+    if value is True:
+        return DownloadResult(DownloadStatus.DOWNLOADED, f"{source} 完成")
+    if value is False:
+        return DownloadResult(DownloadStatus.FAILED, f"{source} 下载失败")
+    logger.warning("%s 未返回结构化结果: %r", source, value)
+    return DownloadResult(DownloadStatus.FAILED, f"{source} 未返回下载结果")
+
+
 def dispatch_url(url, force=False):
-    """统一入口：按站点自动分发到对应下载器。
+    """统一入口：按站点自动分发到对应下载器，并返回 DownloadResult。
 
     xiaohongshu     → xhs_downloader（手写解析，需 Cookie）
     抖音图文/视频   → douyin_downloader（手写解析+签名 detail API，需登录 Cookie）
@@ -275,9 +292,12 @@ def dispatch_url(url, force=False):
         from .xhs_downloader import download_xhs_media
 
         cookie = load_cookie_for_url(url)
-        if cookie:
-            download_xhs_media(url, cookie, force=force)
-        return
+        if not cookie:
+            return DownloadResult(
+                DownloadStatus.FAILED,
+                "缺少小红书 Cookie：cookies/xiaohongshu.txt 为空或不存在",
+            )
+        return _as_result(download_xhs_media(url, cookie, force=force), "小红书下载器")
 
     if site_name == "douyin":
         # /note/ 图文笔记、/video/ 视频都走手写解析（yt-dlp 的 DouyinIE
@@ -296,33 +316,39 @@ def dispatch_url(url, force=False):
             from .sites import load_cookie_for_url
 
             cookie = load_cookie_for_url(url)
-            if cookie:
-                if is_douyin_note_url(resolved):
+            if not cookie:
+                return DownloadResult(
+                    DownloadStatus.FAILED,
+                    "缺少抖音 Cookie：cookies/douyin.txt 为空或不存在",
+                )
+            if is_douyin_note_url(resolved):
+                return _as_result(
                     download_douyin_note(
                         resolved, cookie_text_to_header(cookie), force=force
-                    )
-                else:
-                    download_douyin_video(
-                        resolved, cookie_text_to_header(cookie), force=force
-                    )
-        else:
-            # /user/ 等其他 douyin URL 仍兜底 yt-dlp
-            download_url(url, force=force)
-        return
+                    ),
+                    "抖音图文下载器",
+                )
+            return _as_result(
+                download_douyin_video(
+                    resolved, cookie_text_to_header(cookie), force=force
+                ),
+                "抖音视频下载器",
+            )
+        # /user/ 等其他 douyin URL 仍兜底 yt-dlp
+        return _as_result(download_url(url, force=force), "yt-dlp")
 
     if site_name in _YTDLP_SITES:
-        download_url(url, force=force)
-        return
+        return _as_result(download_url(url, force=force), "yt-dlp")
 
     # 未知站点：交给通用静态网页抓取器
     from importlib import import_module
 
     mod = import_module("core.1024_downloader")
-    mod.extract_general_media(url, force=force)
+    return _as_result(mod.extract_general_media(url, force=force), "通用网页下载器")
 
 
-def download_url(url, force=False):
-    """下载单个 URL。自动识别站点并应用对应 cookie。
+def download_url(url, force=False) -> DownloadResult:
+    """下载单个 URL，返回 DownloadResult。自动识别站点并应用对应 cookie。
     force=True（--force）时传 overwrites 强制重下，覆盖已存在文件。"""
     site_name = get_site_name(url)
     if site_name not in SITE_REQUIRE_COOKIE:
@@ -392,7 +418,7 @@ def download_url(url, force=False):
                     os.path.abspath(save_dir),
                     elapsed,
                 )
-                return True
+                return DownloadResult(DownloadStatus.DOWNLOADED, f"已下载: {title}")
         except DownloadError as e:
             elapsed = time.time() - start_time
             kind, msg = diagnose_error(str(e))
@@ -412,7 +438,7 @@ def download_url(url, force=False):
                 logger.error("❌ 下载失败（需登录）: %s（耗时 %.1f 秒）", msg, elapsed)
             else:
                 logger.error("❌ 下载失败: %s（耗时 %.1f 秒）", msg, elapsed)
-            return False
+            return DownloadResult(DownloadStatus.FAILED, msg)
         except Exception as e:  # noqa: BLE001 顶层兜底，避免 prompt 循环中断
             elapsed = time.time() - start_time
             kind, msg = diagnose_error(str(e))
@@ -428,11 +454,11 @@ def download_url(url, force=False):
                 time.sleep(wait)
                 continue
             logger.error("❌ 意外错误: %s（耗时 %.1f 秒）", e, elapsed)
-            return False
+            return DownloadResult(DownloadStatus.FAILED, f"意外错误: {e}")
     # 瞬时错误重试用尽
     elapsed = time.time() - start_time
     logger.error("❌ 下载失败: 多次重试仍遇瞬时网络错误（耗时 %.1f 秒）", elapsed)
-    return False
+    return DownloadResult(DownloadStatus.FAILED, "多次重试仍遇瞬时网络错误")
 
 
 def main():

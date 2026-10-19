@@ -6,6 +6,7 @@ import os
 import pytest
 
 from core.downloader import build_ydl_opts, resolve_uploader
+from core.result import DownloadResult, DownloadStatus
 
 
 # ---------------- resolve_uploader ----------------
@@ -183,6 +184,56 @@ class TestDispatchUrl:
         )
         downloader.dispatch_url("https://www.xiaohongshu.com/explore/abc")
         assert forces == [False]
+
+    # ---- 结构化结果契约 ----
+
+    def test_xhs_missing_cookie_returns_failed(self, monkeypatch):
+        import core.downloader as downloader
+
+        monkeypatch.setattr("core.sites.load_cookie_for_url", lambda url: None)
+        result = downloader.dispatch_url("https://www.xiaohongshu.com/explore/abc")
+        assert result.status is DownloadStatus.FAILED
+        assert "Cookie" in result.message
+
+    def test_douyin_missing_cookie_returns_failed(self, monkeypatch):
+        import core.downloader as downloader
+
+        monkeypatch.setattr("core.sites.load_cookie_for_url", lambda url: None)
+        result = downloader.dispatch_url(
+            "https://www.douyin.com/note/7666381907030529443"
+        )
+        assert result.status is DownloadStatus.FAILED
+        assert "Cookie" in result.message
+
+    def test_ytdlp_result_propagated(self, monkeypatch):
+        import core.downloader as downloader
+
+        expected = DownloadResult(DownloadStatus.DOWNLOADED, "已下载: 测试")
+        monkeypatch.setattr(
+            "core.downloader.download_url", lambda u, force=False: expected
+        )
+        result = downloader.dispatch_url("https://www.bilibili.com/video/BV1xx")
+        assert result is expected
+
+    def test_unknown_site_no_media_propagated(self, monkeypatch):
+        import core.downloader as downloader
+
+        expected = DownloadResult(DownloadStatus.NO_MEDIA, "没有媒体")
+        monkeypatch.setattr(
+            "core.1024_downloader.extract_general_media",
+            lambda url, force=False: expected,
+        )
+        result = downloader.dispatch_url("https://example.com/some/page")
+        assert result is expected
+
+    def test_legacy_none_backend_is_failure(self, monkeypatch):
+        # None 不再被当成“成功但没文件”，避免静默失败被误报为重复链接
+        import core.downloader as downloader
+
+        monkeypatch.setattr("core.downloader.download_url", lambda u, force=False: None)
+        result = downloader.dispatch_url("https://www.bilibili.com/video/BV1xx")
+        assert result.status is DownloadStatus.FAILED
+        assert "未返回下载结果" in result.message
 
 
 class TestDiagnoseError:

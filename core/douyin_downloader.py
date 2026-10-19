@@ -34,6 +34,7 @@ from urllib.parse import quote, unquote, urlencode
 from .douyin_sign import douyin_websign
 from . import http_client
 from .douyin_sign.douyin_abogus import ABogus
+from .result import DownloadResult, DownloadStatus, result_from_counts
 from .utils import (
     build_download_dir,
     extract_urls,
@@ -681,8 +682,8 @@ def download_file(session, url, filepath, headers, max_retries=5, force=False):
     return f"  [失败] {os.path.basename(filepath)} 下载报错: {last_err}"
 
 
-def download_douyin_note(url, cookie, force=False):
-    """下载抖音图文笔记的全部图片（及笔记级视频/实况图视频）。
+def download_douyin_note(url, cookie, force=False) -> DownloadResult:
+    """下载抖音图文笔记的全部图片（及笔记级视频/实况图视频），返回 DownloadResult。
     force=True（--force）时强制重下，覆盖已存在的旧产物。"""
     start_time = time.time()
     headers = get_headers(cookie)
@@ -692,7 +693,7 @@ def download_douyin_note(url, cookie, force=False):
     response = _fetch_page(session, url, headers)
     if response is None:
         logger.error("请求失败，耗时 %.1f 秒。", time.time() - start_time)
-        return
+        return DownloadResult(DownloadStatus.FAILED, "请求失败（网络异常）")
 
     html = response.text
 
@@ -715,13 +716,18 @@ def download_douyin_note(url, cookie, force=False):
                     "③ 确认 cookies/douyin.txt 是有效登录态。（耗时 %.1f 秒）",
                     time.time() - start_time,
                 )
-            else:
-                logger.error(
-                    "提取失败：抖音返回了反爬挑战页，说明 Cookie 缺失或已失效。"
-                    "请在 cookies/douyin.txt 中填入有效的登录态 Cookie 后重试。（耗时 %.1f 秒）",
-                    time.time() - start_time,
+                return DownloadResult(
+                    DownloadStatus.FAILED,
+                    "触发抖音验证码中间页（IP 高频或网络被限流）",
                 )
-            return
+            logger.error(
+                "提取失败：抖音返回了反爬挑战页，说明 Cookie 缺失或已失效。"
+                "请在 cookies/douyin.txt 中填入有效的登录态 Cookie 后重试。（耗时 %.1f 秒）",
+                time.time() - start_time,
+            )
+            return DownloadResult(
+                DownloadStatus.FAILED, "抖音返回反爬挑战页（Cookie 缺失或失效）"
+            )
     else:
         detail = extract_note_detail(html)
     if detail is None:
@@ -735,7 +741,9 @@ def download_douyin_note(url, cookie, force=False):
             getattr(response, "url", "?"),
             time.time() - start_time,
         )
-        return
+        return DownloadResult(
+            DownloadStatus.FAILED, "未定位到笔记详情（页面结构变更或 Cookie 失效）"
+        )
 
     # 笔记 ID 优先取自 URL（可溯源），缺失时用 detail 的 awemeId/aweme_id
     m = _NOTE_URL_RE.search(url)
@@ -782,6 +790,7 @@ def download_douyin_note(url, cookie, force=False):
             logger.warning("发现 video 字段但未能提取到直链：%s", reason)
 
     # 3. 并发下载（维持 max_workers=5，避免触发 IP 熔断）
+    downloaded = skipped = failed = 0
     if download_tasks:
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [
@@ -790,18 +799,21 @@ def download_douyin_note(url, cookie, force=False):
                 )
                 for task in download_tasks
             ]
-            succeeded = failed = 0
             for future in as_completed(futures):
                 result = future.result()
                 if result.startswith("  [失败]"):
                     failed += 1
                     logger.error("%s", result)
+                elif result.startswith("  [跳过]"):
+                    skipped += 1
+                    logger.info("%s", result)
                 else:
-                    succeeded += 1
+                    downloaded += 1
                     logger.info("%s", result)
             logger.info(
-                "下载完成：%d 成功 / %d 失败 / 共 %d 项，耗时 %.1f 秒",
-                succeeded,
+                "下载完成：%d 新增 / %d 跳过 / %d 失败 / 共 %d 项，耗时 %.1f 秒",
+                downloaded,
+                skipped,
                 failed,
                 len(download_tasks),
                 time.time() - start_time,
@@ -812,10 +824,11 @@ def download_douyin_note(url, cookie, force=False):
     session.close()
     logger.info("📁 保存目录: %s", os.path.abspath(base_path))
     logger.info("该链接处理完成，耗时 %.1f 秒。", time.time() - start_time)
+    return result_from_counts(downloaded, skipped, failed)
 
 
-def download_douyin_video(url, cookie, force=False):
-    """下载抖音视频（douyin.com/video/<id>）。
+def download_douyin_video(url, cookie, force=False) -> DownloadResult:
+    """下载抖音视频（douyin.com/video/<id>），返回 DownloadResult。
 
     走签名的 detail API（见 build_signed_detail_url 头注）——2026-08/09
     起 yt-dlp 的 DouyinIE 直连该接口被 Argus 风控签名拦死，本路径补齐
@@ -829,7 +842,7 @@ def download_douyin_video(url, cookie, force=False):
     aweme_id = m.group("id") if m else None
     if not aweme_id:
         logger.error("无法从 URL 提取视频 ID（需要 douyin.com/video/<id>）: %s", url)
-        return
+        return DownloadResult(DownloadStatus.FAILED, "无法从 URL 提取视频 ID")
 
     session = http_client.Session()
     logger.info("正在请求视频详情: aweme_id=%s", aweme_id)
@@ -837,7 +850,7 @@ def download_douyin_video(url, cookie, force=False):
     if detail is None:
         logger.error("获取视频详情失败，耗时 %.1f 秒。", time.time() - start_time)
         session.close()
-        return
+        return DownloadResult(DownloadStatus.FAILED, "获取视频详情失败")
 
     aweme_id = str(detail.get("aweme_id") or detail.get("awemeId") or aweme_id)
     play_urls = extract_video_play_urls(detail.get("video"))
@@ -847,7 +860,7 @@ def download_douyin_video(url, cookie, force=False):
             time.time() - start_time,
         )
         session.close()
-        return
+        return DownloadResult(DownloadStatus.FAILED, "详情中未找到可播放直链")
 
     author = extract_douyin_author(detail)
     safe_title = f"{resolve_douyin_basename(detail)}_{aweme_id}"
@@ -858,20 +871,28 @@ def download_douyin_video(url, cookie, force=False):
     logger.info("目标文件: %s", filepath)
 
     headers = get_headers(cookie)
-    ok = False
+    outcome = None
     for candidate in play_urls:
         result = download_file(session, candidate, filepath, headers, force=force)
         if result.startswith("  [失败]"):
             logger.error("%s", result)
             continue
+        if result.startswith("  [跳过]"):
+            logger.info("%s", result)
+            outcome = DownloadResult(DownloadStatus.SKIPPED, "视频已存在")
+            break
         logger.info("%s", result)
-        ok = True
+        outcome = DownloadResult(DownloadStatus.DOWNLOADED, "视频已下载")
         break
-    if not ok:
+    if outcome is None:
         logger.error("共 %d 个播放地址候选全部下载失败", len(play_urls))
+        outcome = DownloadResult(
+            DownloadStatus.FAILED, f"{len(play_urls)} 个播放地址候选全部下载失败"
+        )
 
     session.close()
     logger.info("该链接处理完成，耗时 %.1f 秒。", time.time() - start_time)
+    return outcome
 
 
 def main():

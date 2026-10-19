@@ -7,6 +7,8 @@ import os
 
 import pytest
 
+from core.result import DownloadStatus
+
 mod = importlib.import_module("core.1024_downloader")
 
 
@@ -58,6 +60,38 @@ class TestIsDecorativeName:
     )
     def test_content(self, name):
         assert mod._is_decorative_name(name) is False
+
+
+# ---------------- _looks_like_page_url ----------------
+
+
+class TestLooksLikePageUrl:
+    """A 标签里以媒体后缀结尾的 URL 可能是网页：下载只会得到 HTML。"""
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://commons.wikimedia.org/wiki/File:Example.jpg",
+            "https://commons.wikimedia.org/wiki/File_talk:Example.jpg",
+            "https://commons.wikimedia.org/wiki/Special:WhatLinksHere/File:Example.jpg",
+            "https://commons.wikimedia.org/w/index.php?title=Special:CreateAccount&returnto=File%3AExample.jpg",
+            "https://example.com/article?title=photo.jpg",
+        ],
+    )
+    def test_page_urls(self, url):
+        assert mod._looks_like_page_url(url) is True
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://cdn.example.com/photo.jpg",
+            "https://a.com/direct.png",
+            "https://a.com/path/with:colon/photo.jpg",  # 冒号不在末段
+            "https://a.com/photo.jpg?v=2",
+        ],
+    )
+    def test_direct_media(self, url):
+        assert mod._looks_like_page_url(url) is False
 
 
 # ---------------- download_file 装饰小图过滤 ----------------
@@ -170,6 +204,83 @@ class TestDownloadFileDecorFilter:
         )
         assert "[成功]" in result
         assert os.path.exists(target)
+
+
+# ---------------- 装饰图跳过标记 ----------------
+
+
+class TestDownloadFileSkipMarker:
+    """被删除的装饰图没有产物，需用隐藏标记避免每次重跑都重新下载。"""
+
+    def _fake_session(self, body, content_type="image/jpeg"):
+        class S:
+            calls = 0
+
+            def get(self, url, **kw):
+                self.calls += 1
+                return _FakeImageResp(body, content_type)
+
+        return S()
+
+    def test_small_image_marker_written_and_rerun_skips(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        target = str(tmp_path / "001.jpg")
+        sess = self._fake_session(b"x" * 100)
+        result = mod.download_file(sess, "http://img/001.jpg", target, "http://page")
+        assert "[跳过]" in result
+        assert not os.path.exists(target)
+        marker = tmp_path / ".001.skip"
+        assert marker.read_text(encoding="utf-8") == "http://img/001.jpg"
+
+        class NoRequest:
+            calls = 0
+
+            def get(self, url, **kw):
+                self.calls += 1
+                raise AssertionError("不应发起网络请求")
+
+        sess2 = NoRequest()
+        result = mod.download_file(sess2, "http://img/001.jpg", target, "http://page")
+        assert "此前已判定为装饰图" in result
+        assert sess2.calls == 0
+
+    def test_skip_marker_for_other_url_retries(self, tmp_path, monkeypatch):
+        # 同一序号换了新图：旧标记失效，应重新下载并清除标记
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        target = str(tmp_path / "001.jpg")
+        marker = tmp_path / ".001.skip"
+        marker.write_text("http://img/old.jpg", encoding="utf-8")
+        sess = self._fake_session(b"x" * 30000)
+        result = mod.download_file(sess, "http://img/new.jpg", target, "http://page")
+        assert "[成功]" in result
+        assert os.path.exists(target)
+        assert not marker.exists()
+
+    def test_force_ignores_skip_marker_and_clears_it(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        target = str(tmp_path / "001.jpg")
+        marker = tmp_path / ".001.skip"
+        marker.write_text("http://img/001.jpg", encoding="utf-8")
+        sess = self._fake_session(b"x" * 30000)
+        result = mod.download_file(
+            sess, "http://img/001.jpg", target, "http://page", force=True
+        )
+        assert "[成功]" in result
+        assert os.path.exists(target)
+        assert not marker.exists()
+
+    def test_force_decorative_updates_marker_url(self, tmp_path, monkeypatch):
+        # force 重下后仍是装饰图：标记应更新为当前 URL，避免旧 URL 误命中
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        target = str(tmp_path / "001.jpg")
+        marker = tmp_path / ".001.skip"
+        marker.write_text("http://img/old.jpg", encoding="utf-8")
+        sess = self._fake_session(b"x" * 100)
+        result = mod.download_file(
+            sess, "http://img/new.jpg", target, "http://page", force=True
+        )
+        assert "[跳过]" in result
+        assert marker.read_text(encoding="utf-8") == "http://img/new.jpg"
 
 
 # ---------------- download_file --force ----------------
@@ -300,6 +411,26 @@ class TestCollectMediaUrls:
         assert urls[0] == "https://a.com/p.png"
         assert ("https://a.com/v.mp4", ".mp4") in items
         assert ("https://a.com/direct.jpg", ".jpg") in items
+
+    def test_a_href_page_urls_skipped(self):
+        # MediaWiki 的 /wiki/File:xxx.jpg 与动作页 URL 以媒体后缀结尾，
+        # 实际是网页；保留真正的 CDN 直链。
+        soup = self._soup(
+            '<a href="https://commons.wikimedia.org/wiki/File:Example.jpg">x</a>'
+            '<a href="https://commons.wikimedia.org/wiki/File_talk:Example.jpg">x</a>'
+            '<a href="https://commons.wikimedia.org/w/index.php?title=Special:CreateAccount'
+            '&returnto=File%3AExample.jpg">x</a>'
+            '<a href="https://cdn.example.com/photo.jpg">x</a>'
+        )
+        items = mod.collect_media_urls(
+            soup, "https://commons.wikimedia.org/wiki/File:Example.jpg"
+        )
+        assert items == [("https://cdn.example.com/photo.jpg", ".jpg")]
+
+    def test_a_href_query_param_not_media(self):
+        # 查询参数里出现 foo.jpg 不代表路径是媒体直链
+        soup = self._soup('<a href="https://a.com/page?image=foo.jpg">x</a>')
+        assert mod.collect_media_urls(soup, "https://a.com/") == []
 
     def test_background_image(self):
         soup = self._soup('<div style="background: url(https://a.com/bg.webp)"></div>')
@@ -601,3 +732,83 @@ class TestFixedChrome110UA:
         assert seen["User-Agent"] == _EXPECTED_CHROME110_UA
         assert seen["User-Agent"] == mod.get_headers()["User-Agent"]
         assert "Chrome/110" in seen["User-Agent"]
+
+
+# ---------------- extract_general_media 结果契约 ----------------
+
+
+class _PageResp:
+    def __init__(self):
+        self.text = "<html><head><title>Test</title></head><body></body></html>"
+        self.status_code = 200
+        self.url = "http://x/page"
+
+
+class _DummySession:
+    def close(self):
+        pass
+
+
+class TestExtractGeneralMediaResult:
+    """extract_general_media 必须返回 DownloadResult，供上层区分失败/重复/无媒体。"""
+
+    def _patch_common(self, monkeypatch, tmp_path, media_items):
+        monkeypatch.setattr(mod, "Session", lambda: _DummySession())
+        monkeypatch.setattr(mod, "fetch_page", lambda *a, **k: _PageResp())
+        monkeypatch.setattr(mod, "build_download_dir", lambda *a, **k: str(tmp_path))
+        monkeypatch.setattr(mod, "collect_media_urls", lambda *a, **k: media_items)
+
+    def test_fetch_failure_returns_failed(self, monkeypatch):
+        monkeypatch.setattr(mod, "Session", lambda: _DummySession())
+        monkeypatch.setattr(mod, "fetch_page", lambda *a, **k: None)
+        result = mod.extract_general_media("http://x/page")
+        assert result.status is DownloadStatus.FAILED
+        assert "获取页面失败" in result.message
+
+    def test_no_media_returns_no_media(self, monkeypatch, tmp_path):
+        self._patch_common(monkeypatch, tmp_path, [])
+        result = mod.extract_general_media("http://x/page")
+        assert result.status is DownloadStatus.NO_MEDIA
+
+    def test_success_returns_downloaded(self, monkeypatch, tmp_path):
+        self._patch_common(monkeypatch, tmp_path, [("http://img/1.jpg", ".jpg")])
+
+        def fake_download(session, url, filepath, page_url, force=False):
+            with open(filepath, "wb") as f:
+                f.write(b"x")
+            return "  [成功] -> 001.jpg"
+
+        monkeypatch.setattr(mod, "download_file", fake_download)
+        result = mod.extract_general_media("http://x/page")
+        assert result.status is DownloadStatus.DOWNLOADED
+        assert "新增 1 项" in result.message
+
+    def test_failed_only_returns_failed(self, monkeypatch, tmp_path):
+        self._patch_common(monkeypatch, tmp_path, [("http://img/1.jpg", ".jpg")])
+        monkeypatch.setattr(
+            mod, "download_file", lambda *a, **k: "  [失败] 001.jpg 报错: x"
+        )
+        result = mod.extract_general_media("http://x/page")
+        assert result.status is DownloadStatus.FAILED
+
+    def test_existing_skip_returns_skipped(self, monkeypatch, tmp_path):
+        self._patch_common(monkeypatch, tmp_path, [("http://img/1.jpg", ".jpg")])
+        (tmp_path / "001.jpg").write_bytes(b"old")
+        monkeypatch.setattr(
+            mod,
+            "download_file",
+            lambda *a, **k: "  [跳过] 001.jpg 已存在，无需重复下载",
+        )
+        result = mod.extract_general_media("http://x/page")
+        assert result.status is DownloadStatus.SKIPPED
+
+    def test_filtered_only_returns_no_media(self, monkeypatch, tmp_path):
+        self._patch_common(monkeypatch, tmp_path, [("http://img/1.jpg", ".jpg")])
+        monkeypatch.setattr(
+            mod,
+            "download_file",
+            lambda *a, **k: "  [跳过] 001.jpg 尺寸 20x20 过小，判定为装饰图",
+        )
+        result = mod.extract_general_media("http://x/page")
+        assert result.status is DownloadStatus.NO_MEDIA
+        assert "装饰图" in result.message

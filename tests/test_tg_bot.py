@@ -13,6 +13,7 @@ from telegram.bot import (
     parse_post_meta,
     snapshot_tree,
 )
+from core.result import DownloadResult, DownloadStatus
 
 
 class _Resp:
@@ -205,6 +206,97 @@ class TestHandleMessage:
             download_root=str(tmp_path / "download"),
         )
         assert any("没有新产物" in r for r in replies)
+
+    def test_dispatch_failed_reports_reason(self, tmp_path):
+        s = _Session()
+        replies = handle_message(
+            s,
+            _CFG,
+            _msg("https://x.com/a"),
+            dispatch=lambda u: DownloadResult(
+                DownloadStatus.FAILED, "缺少小红书 Cookie"
+            ),
+            download_root=str(tmp_path / "download"),
+        )
+        assert any("下载失败" in r and "Cookie" in r for r in replies)
+        assert not any("此前已下载过" in r for r in replies)
+
+    def test_dispatch_skipped_notice(self, tmp_path):
+        s = _Session()
+        replies = handle_message(
+            s,
+            _CFG,
+            _msg("https://x.com/a"),
+            dispatch=lambda u: DownloadResult(DownloadStatus.SKIPPED, "已存在 2 项"),
+            download_root=str(tmp_path / "download"),
+        )
+        assert any("此前已下载过" in r for r in replies)
+
+    def test_dispatch_no_media_notice(self, tmp_path):
+        s = _Session()
+        replies = handle_message(
+            s,
+            _CFG,
+            _msg("https://x.com/a"),
+            dispatch=lambda u: DownloadResult(
+                DownloadStatus.NO_MEDIA, "全部 5 项被判定为装饰图"
+            ),
+            download_root=str(tmp_path / "download"),
+        )
+        assert any("没有找到可下载的媒体" in r and "装饰图" in r for r in replies)
+
+    def test_dispatch_success_without_files_not_duplicate(self, tmp_path):
+        # 后端说成功但快照没有新文件：不能再误报成确定的“此前已下载过”
+        s = _Session()
+        replies = handle_message(
+            s,
+            _CFG,
+            _msg("https://x.com/a"),
+            dispatch=lambda u: DownloadResult(
+                DownloadStatus.DOWNLOADED, "已下载: 测试"
+            ),
+            download_root=str(tmp_path / "download"),
+        )
+        assert any("没有新产物" in r and "可能此前已下载过" in r for r in replies)
+        assert not any("下载失败" in r for r in replies)
+
+    def test_partial_download_message(self, tmp_path):
+        root = str(tmp_path / "download")
+
+        def dispatch(url):
+            d = os.path.join(root, "douyin", "背影", "我去！好美_123")
+            _touch(os.path.join(d, "001.jpg"))
+            return DownloadResult(DownloadStatus.PARTIAL, "新增 1 项，失败 1 项")
+
+        s = _Session()
+        replies = handle_message(
+            s,
+            _CFG,
+            _msg("https://x.com/a"),
+            dispatch=dispatch,
+            download_root=root,
+        )
+        assert any("完成：1 项已回传（新增 1 项，失败 1 项）" in r for r in replies)
+
+    def test_failed_with_files_still_uploads_and_reports_reason(self, tmp_path):
+        # 后端已落盘部分文件但整体标记 FAILED：仍应回传，并带上失败原因
+        root = str(tmp_path / "download")
+
+        def dispatch(url):
+            d = os.path.join(root, "douyin", "背影", "我去！好美_123")
+            _touch(os.path.join(d, "001.jpg"))
+            return DownloadResult(DownloadStatus.FAILED, "部分图片失败")
+
+        s = _Session()
+        replies = handle_message(
+            s,
+            _CFG,
+            _msg("https://x.com/a"),
+            dispatch=dispatch,
+            download_root=root,
+        )
+        assert any(m == "sendPhoto" for m, _ in s.sent)
+        assert any("部分图片失败" in r for r in replies)
 
     def test_dispatch_error_reported(self, tmp_path):
         def boom(url):

@@ -31,6 +31,7 @@ import time
 
 from core import http_client
 from core.downloader import dispatch_url
+from core.result import DownloadStatus
 from .upload import TgError, call_api, load_config, upload
 from core.utils import extract_urls, setup_logging
 
@@ -214,14 +215,32 @@ def handle_message(
         say(f"开始下载：{url}")
         before = snapshot_tree(download_root)
         try:
-            dispatch(url)
+            result = dispatch(url)
         except Exception as e:  # 下载器内部多已容错，这里兜底
             logger.exception("下载失败: %s", url)
             say(f"下载失败：{e}")
             continue
+        status = getattr(result, "status", None)
+        detail = getattr(result, "message", "") or ""
         groups = group_new_files(before, download_root)
+        if status == DownloadStatus.FAILED and not groups:
+            say(f"下载失败：{detail or '未知原因'}")
+            continue
+        if status == DownloadStatus.NO_MEDIA and not groups:
+            say(
+                f"没有找到可下载的媒体：{detail}"
+                if detail
+                else "没有找到可下载的媒体。"
+            )
+            continue
         if not groups:
-            say("没有新产物——该内容此前已下载过。")
+            if status == DownloadStatus.SKIPPED:
+                say("没有新产物——该内容此前已下载过。")
+            elif status in (DownloadStatus.DOWNLOADED, DownloadStatus.PARTIAL):
+                say("没有新产物——可能此前已下载过，或产物被过滤。")
+            else:
+                # 兼容旧的 dispatch 桩/第三方后端：保持原提示
+                say("没有新产物——该内容此前已下载过。")
             continue
         sent_total, skipped_total = 0, 0
         for group_key, rel_files in groups.items():
@@ -243,11 +262,14 @@ def handle_message(
             skipped_total += len(skipped)
             for path in skipped:
                 say(f"超 50MB 已跳过（文件在 {path}）")
-        say(
+        completion = (
             f"完成：{sent_total} 项已回传。"
             if not skipped_total
             else f"完成：{sent_total} 项已回传，{skipped_total} 项超限跳过。"
         )
+        if status in (DownloadStatus.PARTIAL, DownloadStatus.FAILED) and detail:
+            completion = completion.rstrip("。") + f"（{detail}）。"
+        say(completion)
     return replies
 
 

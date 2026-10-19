@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from . import http_client
 from .sites import get_site_name, load_cookie_for_url
+from .result import DownloadResult, DownloadStatus, result_from_counts
 from .utils import (
     build_download_dir,
     extract_urls,
@@ -401,8 +402,8 @@ def _fetch_page(session, url, headers, max_retries=5):
     return None
 
 
-def download_xhs_media(url, cookie, force=False):
-    """下载小红书笔记全部媒体（图片/实况/视频）。
+def download_xhs_media(url, cookie, force=False) -> DownloadResult:
+    """下载小红书笔记全部媒体（图片/实况/视频），返回 DownloadResult。
     force=True（--force）时强制重下，覆盖已存在的旧产物。"""
     start_time = time.time()
     # 每次解析新链接都生成一个全新的随机 Header
@@ -417,7 +418,9 @@ def download_xhs_media(url, cookie, force=False):
     response = _fetch_page(session, url, headers)
     if response is None:
         logger.error("请求失败，耗时 %.1f 秒。", time.time() - start_time)
-        return
+        return DownloadResult(
+            DownloadStatus.FAILED, "请求失败（网络异常或 Cookie/风控问题）"
+        )
 
     html = response.text
 
@@ -428,7 +431,7 @@ def download_xhs_media(url, cookie, force=False):
             "请在浏览器中打开链接完成验证后重试。（耗时 %.1f 秒）",
             time.time() - start_time,
         )
-        return
+        return DownloadResult(DownloadStatus.FAILED, "触发风控拦截或 Cookie 已失效")
 
     # 缺 xsec_token 检测（必须在 404 判定之前：300031 同样落 404 页，
     # 误报成"笔记被删"会让用户白找链接——笔记其实在架上）
@@ -441,7 +444,9 @@ def download_xhs_media(url, cookie, force=False):
             "已过期被风控，请在 App 里重新获取该笔记的分享链接。（耗时 %.1f 秒）",
             time.time() - start_time,
         )
-        return
+        return DownloadResult(
+            DownloadStatus.FAILED, "链接缺少 xsec_token（请用 App 重新分享）"
+        )
 
     # 笔记不存在检测：落地到 404 页时 noteDetailMap 为空，
     # 会被下方「页面结构可能已更新」误报，需在此提前拦截并给出明确原因。
@@ -451,7 +456,7 @@ def download_xhs_media(url, cookie, force=False):
             "请确认链接是否有效或已被作者删除。（耗时 %.1f 秒）",
             time.time() - start_time,
         )
-        return
+        return DownloadResult(DownloadStatus.FAILED, "笔记已被删除或不存在")
 
     # 贪婪匹配到最后一个 } 后接 </script>，避免被内部 }</script> 截断
     state_match = re.search(
@@ -462,7 +467,9 @@ def download_xhs_media(url, cookie, force=False):
             "未能找到页面数据。可能是页面结构变更或 Cookie 失效。（耗时 %.1f 秒）",
             time.time() - start_time,
         )
-        return
+        return DownloadResult(
+            DownloadStatus.FAILED, "未找到页面数据（页面结构变更或 Cookie 失效）"
+        )
 
     try:
         # 仅替换 JSON 值语境的 undefined -> null，避免误伤正文/URL
@@ -470,7 +477,7 @@ def download_xhs_media(url, cookie, force=False):
         data = json.loads(state_json)
     except json.JSONDecodeError as e:
         logger.error("JSON 解析失败: %s（耗时 %.1f 秒）", e, time.time() - start_time)
-        return
+        return DownloadResult(DownloadStatus.FAILED, f"JSON 解析失败: {e}")
 
     try:
         note_data = data.get("note", {}).get("noteDetailMap", {})
@@ -479,7 +486,9 @@ def download_xhs_media(url, cookie, force=False):
                 "提取详情失败，页面结构可能已更新。（耗时 %.1f 秒）",
                 time.time() - start_time,
             )
-            return
+            return DownloadResult(
+                DownloadStatus.FAILED, "提取详情失败（页面结构可能已更新）"
+            )
 
         note_id = list(note_data.keys())[0]
         note = note_data[note_id].get("note", {})
@@ -532,6 +541,7 @@ def download_xhs_media(url, cookie, force=False):
                 logger.warning("发现 video 字段但未能提取到直链：%s", reason)
 
         # 3. 核心：执行多线程下载任务
+        downloaded = skipped = failed = 0
         if download_tasks:
             # 设定 max_workers 控制并发数，建议维持在 5 左右，过高容易触发 IP 熔断
             with ThreadPoolExecutor(max_workers=5) as executor:
@@ -544,21 +554,23 @@ def download_xhs_media(url, cookie, force=False):
                 ]
 
                 # as_completed 允许我们在任意一个线程完成时立即打印结果，而不用等待所有任务结束
-                succeeded = 0
-                failed = 0
                 for future in as_completed(futures):
                     result = future.result()
                     if result.startswith("  [失败]"):
                         failed += 1
                         logger.error("%s", result)
+                    elif result.startswith("  [跳过]"):
+                        skipped += 1
+                        logger.info("%s", result)
                     else:
-                        succeeded += 1
+                        downloaded += 1
                         logger.info("%s", result)
 
                 elapsed = time.time() - start_time
                 logger.info(
-                    "下载完成：%d 成功 / %d 失败 / 共 %d 项，耗时 %.1f 秒",
-                    succeeded,
+                    "下载完成：%d 新增 / %d 跳过 / %d 失败 / 共 %d 项，耗时 %.1f 秒",
+                    downloaded,
+                    skipped,
                     failed,
                     len(download_tasks),
                     elapsed,
@@ -571,6 +583,7 @@ def download_xhs_media(url, cookie, force=False):
         session.close()
         logger.info("📁 保存目录: %s", os.path.abspath(base_path))
         logger.info("该链接处理完成，耗时 %.1f 秒。", time.time() - start_time)
+        return result_from_counts(downloaded, skipped, failed)
 
     except Exception as e:
         logger.error(
@@ -579,6 +592,7 @@ def download_xhs_media(url, cookie, force=False):
             time.time() - start_time,
             exc_info=True,
         )
+        return DownloadResult(DownloadStatus.FAILED, f"解析数据时发生意外错误: {e}")
 
 
 def main():
