@@ -91,28 +91,50 @@ def group_new_files(before, root=DOWNLOAD_ROOT):
     return groups
 
 
+def _looks_generated(name):
+    """产物目录内的文件按 001.jpg / video.mp4 序号命名；散文件按标题命名。"""
+    stem = name.split(".", 1)[0]
+    return stem == "video" or (len(stem) == 3 and stem.isdigit())
+
+
+def _is_post_dir_group(group_key, rel_files):
+    """判断 group_key 是帖子目录还是散文件的父目录。
+
+    目录形态：download/<site>[/<作者>]/<标题>/<001.jpg…>
+    散文件：  download/<site>[/<作者>]/<标题>.<ext>
+    深度 >=3 必为帖子目录；<=1 必为散文件；深度 2 靠文件名区分。
+    """
+    parts = group_key.split(os.sep) if group_key else []
+    if len(parts) >= 3:
+        return True
+    if len(parts) == 2:
+        if not rel_files:
+            # 没有文件信息时沿用旧口径：目录产物更常见
+            return True
+        return all(_looks_generated(os.path.basename(p)) for p in rel_files)
+    return False
+
+
 def parse_post_meta(group_key, rel_files):
     """从产物位置反推 (site, author, title)。
 
     目录形态：download/<site>[/<作者>]/<标题>/
     散文件：  download/<site>[/<作者>]/<标题>.<ext>
-    作者层存在与否按深度判定（作者非空才加层，见 build_download_dir）。
+    group_new_files 对散文件返回的 group_key 是父目录（<site> 或
+    <site>/<作者>），必须与帖子目录区分，否则作者层会被误当成标题。
     """
-    if group_key:  # 产物在目录内
-        parts = group_key.split(os.sep)
-        site = parts[0] if parts else ""
+    parts = group_key.split(os.sep) if group_key else []
+    if _is_post_dir_group(group_key, rel_files):
+        site = parts[0]
         if len(parts) >= 3:
             return site, parts[1], parts[2]
-        if len(parts) == 2:
-            return site, "", parts[1]
-        return site, "", ""
-    # 散文件：目录是 download 或 download/<site>（或含作者层）
-    rel = rel_files[0]
-    parent = os.path.dirname(rel)
-    stem = os.path.splitext(os.path.basename(rel))[0]
-    parts = parent.split(os.sep) if parent else []
+        return site, "", parts[-1]
+    # 散文件：group_key 为空时从文件路径的父目录推导
+    if not parts and rel_files:
+        parts = os.path.dirname(rel_files[0]).split(os.sep)
     site = parts[0] if parts else ""
     author = parts[1] if len(parts) >= 2 else ""
+    stem = os.path.splitext(os.path.basename(rel_files[0]))[0] if rel_files else ""
     return site, author, stem
 
 
@@ -244,24 +266,32 @@ def handle_message(
             continue
         sent_total, skipped_total = 0, 0
         for group_key, rel_files in groups.items():
-            site, author, title = parse_post_meta(group_key, rel_files)
-            target = (
-                os.path.join(download_root, group_key)
-                if group_key
-                else os.path.join(download_root, rel_files[0])
-            )
-            caption = build_caption(site, author, title)
-            try:
-                sent, skipped = upload(
-                    session, cfg, target, caption=caption, chat_id=chat_id
-                )
-            except TgError as e:
-                say(f"上传 Telegram 失败：{e}")
-                continue
-            sent_total += sent
-            skipped_total += len(skipped)
-            for path in skipped:
-                say(f"超 50MB 已跳过（文件在 {path}）")
+            if group_key and _is_post_dir_group(group_key, rel_files):
+                targets = [
+                    (
+                        os.path.join(download_root, group_key),
+                        parse_post_meta(group_key, rel_files),
+                    )
+                ]
+            else:
+                # 散文件：逐个上传本批新文件，避免把同目录里的旧文件重发
+                targets = [
+                    (os.path.join(download_root, rel), parse_post_meta("", [rel]))
+                    for rel in rel_files
+                ]
+            for target, (site, author, title) in targets:
+                caption = build_caption(site, author, title)
+                try:
+                    sent, skipped = upload(
+                        session, cfg, target, caption=caption, chat_id=chat_id
+                    )
+                except TgError as e:
+                    say(f"上传 Telegram 失败：{e}")
+                    continue
+                sent_total += sent
+                skipped_total += len(skipped)
+                for path in skipped:
+                    say(f"超 50MB 已跳过（文件在 {path}）")
         completion = (
             f"完成：{sent_total} 项已回传。"
             if not skipped_total

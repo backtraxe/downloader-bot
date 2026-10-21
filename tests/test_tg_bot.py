@@ -113,7 +113,7 @@ class TestSnapshotAndMeta:
             "",
             "标题_1",
         )
-        # 散文件：download/<site>/<作者>?/<标题>.mp4 → group_key 为空
+        # 兼容直接传文件路径（group_key 为空）：从 rel_files 父目录推导
         assert parse_post_meta("", [os.path.join("douyin", "背影", "标题_1.mp4")]) == (
             "douyin",
             "背影",
@@ -124,6 +124,35 @@ class TestSnapshotAndMeta:
             "",
             "标题",
         )
+
+    def test_parse_post_meta_standalone_file_group(self):
+        # group_new_files 对散文件返回的 group_key 是父目录（<site> 或
+        # <site>/<作者>），不能当成帖子目录解析，否则作者层会被误当标题
+        assert parse_post_meta(
+            os.path.join("youtube", "SomeChannel"),
+            [os.path.join("youtube", "SomeChannel", "My Video.mp4")],
+        ) == ("youtube", "SomeChannel", "My Video")
+        assert parse_post_meta(
+            "youtube", [os.path.join("youtube", "My Video.mp4")]
+        ) == ("youtube", "", "My Video")
+        assert parse_post_meta(
+            os.path.join("douyin", "背影"),
+            [os.path.join("douyin", "背影", "标题_1.mp4")],
+        ) == ("douyin", "背影", "标题_1")
+
+    def test_parse_post_meta_post_dir_with_generated_files(self):
+        # 目录产物的文件按 001.jpg / video.mp4 生成，深度 2 时仍是帖子目录
+        assert parse_post_meta(
+            os.path.join("xiaohongshu", "标题_123"),
+            [os.path.join("xiaohongshu", "标题_123", "video.mp4")],
+        ) == ("xiaohongshu", "", "标题_123")
+        assert parse_post_meta(
+            os.path.join("douyin", "标题_123"),
+            [
+                os.path.join("douyin", "标题_123", "001.jpg"),
+                os.path.join("douyin", "标题_123", "video.mp4"),
+            ],
+        ) == ("douyin", "", "标题_123")
 
 
 # ---------------- 消息流 ----------------
@@ -195,6 +224,46 @@ class TestHandleMessage:
         assert any(r.startswith("完成：3 项已回传") for r in replies)
         # 回传到消息来源聊天，而非配置里的默认 chat_id
         assert all(d.get("chat_id") == 42 for _, d in s.sent)
+
+    def test_youtube_single_file_caption_has_author_tag(self, tmp_path):
+        root = str(tmp_path / "download")
+
+        def dispatch(url):
+            _touch(os.path.join(root, "youtube", "SomeChannel", "My Video.mp4"))
+            return DownloadResult(DownloadStatus.DOWNLOADED, "已下载: My Video")
+
+        s = _Session()
+        replies = handle_message(
+            s,
+            _CFG,
+            _msg("https://www.youtube.com/watch?v=abc"),
+            dispatch=dispatch,
+            download_root=root,
+        )
+        video = next(d for m, d in s.sent if m == "sendVideo")
+        assert video["caption"].startswith("#SomeChannel #youtube\nMy Video")
+        assert any(r.startswith("完成：1 项已回传") for r in replies)
+
+    def test_youtube_single_file_group_only_uploads_new_file(self, tmp_path):
+        # 散文件组的 group_key 是作者目录，不能把目录里的旧视频一起重发
+        root = str(tmp_path / "download")
+        _touch(os.path.join(root, "youtube", "SomeChannel", "Old Video.mp4"))
+
+        def dispatch(url):
+            _touch(os.path.join(root, "youtube", "SomeChannel", "New Video.mp4"))
+            return DownloadResult(DownloadStatus.DOWNLOADED, "已下载: New Video")
+
+        s = _Session()
+        handle_message(
+            s,
+            _CFG,
+            _msg("https://www.youtube.com/watch?v=new"),
+            dispatch=dispatch,
+            download_root=root,
+        )
+        videos = [d for m, d in s.sent if m == "sendVideo"]
+        assert len(videos) == 1
+        assert videos[0]["caption"].startswith("#SomeChannel #youtube\nNew Video")
 
     def test_no_new_files_notice(self, tmp_path):
         s = _Session()
