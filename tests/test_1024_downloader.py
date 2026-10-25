@@ -355,6 +355,79 @@ class TestDownloadFileForce:
         assert os.path.getsize(target) == 30000
 
 
+class TestDownloadFileTransientRetry:
+    """图床瞬断按瞬时网络错误退避重试——2026-10 Termux 实测：23img.com
+    的 TLS 握手被 CDN 间歇性拒绝（curl 35 Connection closed abruptly），
+    5 并发下约 8 成图片单次尝试即放弃；瞬时错误重试即可恢复。"""
+
+    _SSL_ERR = RuntimeError(
+        "Failed to perform, curl: (35) BoringSSL SSL_connect: "
+        "Connection closed abruptly (SSL_ERROR_SYSCALL; error queue empty) "
+        "in connection to 23img.com:443"
+    )
+
+    def test_transient_ssl_error_retried_until_success(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        err = self._SSL_ERR
+        calls = []
+
+        class S:
+            def get(self, url, **kw):
+                calls.append(url)
+                if len(calls) < 3:
+                    raise err
+                return _FakeImageResp(b"x" * 30000, "image/jpeg")
+
+        target = str(tmp_path / "001.jpg")
+        result = mod.download_file(S(), "http://img/001.jpg", target, "http://page")
+        assert "[成功]" in result
+        assert len(calls) == 3
+        assert os.path.exists(target)
+
+    def test_permanent_error_fails_without_retry(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        calls = []
+
+        class S:
+            def get(self, url, **kw):
+                calls.append(url)
+                raise RuntimeError("disk quota exceeded")
+
+        target = str(tmp_path / "001.jpg")
+        result = mod.download_file(S(), "http://img/001.jpg", target, "http://page")
+        assert "[失败]" in result
+        assert len(calls) == 1
+
+    def test_partial_file_removed_when_all_retries_fail(self, tmp_path, monkeypatch):
+        # 流式写入中途断开：重试耗尽后不留半截文件，否则下次重跑会被
+        # 幂等判断误当成"已存在"跳过，产物永久缺一张
+        monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+        calls = []
+
+        class _BrokenStream:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"Content-Type": "image/jpeg"}
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, chunk_size=8192):
+                yield b"x" * 8192
+                raise TestDownloadFileTransientRetry._SSL_ERR
+
+        class S:
+            def get(self, url, **kw):
+                calls.append(url)
+                return _BrokenStream()
+
+        target = str(tmp_path / "001.jpg")
+        result = mod.download_file(S(), "http://img/001.jpg", target, "http://page")
+        assert "[失败]" in result
+        assert len(calls) == 5  # 默认重试 5 次
+        assert list(tmp_path.iterdir()) == []  # 无半截文件、无 _1 副本
+
+
 # ---------------- make_page_dir_name ----------------
 
 

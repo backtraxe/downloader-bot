@@ -1,4 +1,3 @@
-from .http_client import Session
 import glob
 import json
 import os
@@ -9,8 +8,10 @@ from urllib.parse import unquote, urlparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 
+from .http_client import Session
 from .sites import get_site_name
 from .result import DownloadResult, DownloadStatus, result_from_counts
+from .xhs_downloader import _is_transient_error
 from .utils import (
     build_download_dir,
     extract_url_numeric_id,
@@ -200,9 +201,11 @@ def _clear_skip_marker(filepath):
         pass
 
 
-def download_file(session, url, filepath, page_url, force=False):
+def download_file(session, url, filepath, page_url, max_retries=5, force=False):
     """单文件下载逻辑，增加防盗链绕过。文件名冲突时原子去重，绝不覆盖；
     下载后按 Content-Type 校正扩展名，避免名实不符。
+    DNS/超时/连接重置等瞬时网络错误（含图床 TLS 瞬断，curl 35）退避重试。
+    流式写入中途失败时清理残留文件，避免重试留下损坏文件。
     force=True（--force）时跳过幂等判断强制重下：写 .part 临时文件，
     成功后原子替换旧产物，中途失败不破坏旧文件。
     注意：落盘文件名已是 <标题>_NN 序号名，按名称的装饰过滤在
@@ -235,69 +238,98 @@ def download_file(session, url, filepath, page_url, force=False):
         "Sec-Fetch-Site": "cross-site",
     }
 
-    try:
-        # 稍微把延迟调大一点，避免瞬间并发被封 IP
-        time.sleep(random.uniform(0.5, 1.5))
+    last_err = None
+    for attempt in range(1, max_retries + 1):
+        safe_path = None
+        try:
+            # 稍微把延迟调大一点，避免瞬间并发被封 IP
+            time.sleep(random.uniform(0.5, 1.5))
 
-        # 始终传 impersonate；http_client 在 curl_cffi 不可用时用系统 curl 模拟
-        r = session.get(
-            url,
-            headers=img_headers,
-            stream=True,
-            timeout=30,
-            impersonate=_IMPERSONATE,
-        )
-        r.raise_for_status()
-
-        # 验证一下下载下来的到底是不是真实图片
-        content_type = r.headers.get("Content-Type", "")
-        if is_html_content(content_type):
-            return (
-                f"  [失败] {os.path.basename(filepath)} "
-                "返回 HTML 页面（非媒体直链或被风控拦截）"
+            # 始终传 impersonate；http_client 在 curl_cffi 不可用时用系统 curl 模拟
+            r = session.get(
+                url,
+                headers=img_headers,
+                stream=True,
+                timeout=30,
+                impersonate=_IMPERSONATE,
             )
+            r.raise_for_status()
 
-        # 按 URL 后缀 + Content-Type 校正扩展名，避免 png/webp 被误存成 .jpg
-        ext = guess_extension(url, content_type, default=".jpg")
-        name, old_ext = os.path.splitext(filepath)
-        if old_ext.lower() != ext.lower():
-            filepath = name + ext
+            # 验证一下下载下来的到底是不是真实图片
+            content_type = r.headers.get("Content-Type", "")
+            if is_html_content(content_type):
+                return (
+                    f"  [失败] {os.path.basename(filepath)} "
+                    "返回 HTML 页面（非媒体直链或被风控拦截）"
+                )
 
-        # force=强制重下：写 .part 成功后原子替换（失败不动旧文件）；
-        # 否则原子去重——并发同名不会撞车覆盖
-        safe_path = (filepath + ".part") if force else unique_path(filepath)
+            # 按 URL 后缀 + Content-Type 校正扩展名，避免 png/webp 被误存成 .jpg
+            ext = guess_extension(url, content_type, default=".jpg")
+            name, old_ext = os.path.splitext(filepath)
+            if old_ext.lower() != ext.lower():
+                filepath = name + ext
 
-        with open(safe_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-        if force:
-            os.replace(safe_path, filepath)  # 原子替换旧产物，不留 .part
-            safe_path = filepath
+            # force=强制重下：写 .part 成功后原子替换（失败不动旧文件）；
+            # 否则原子去重——并发同名不会撞车覆盖
+            safe_path = (filepath + ".part") if force else unique_path(filepath)
 
-        # 装饰图过滤：优先按宽高（短边过小判为头像/logo），解析不出再按体积。
-        # 视频不过滤——短视频也可能很小。
-        if ext != ".mp4":
-            dims = None
-            with open(safe_path, "rb") as f:
-                dims = get_image_dimensions(f.read(32 * 1024))
-            if dims is not None:
-                if min(dims) < MIN_IMAGE_DIMENSION:
+            with open(safe_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            if force:
+                os.replace(safe_path, filepath)  # 原子替换旧产物，不留 .part
+                safe_path = filepath
+
+            # 装饰图过滤：优先按宽高（短边过小判为头像/logo），解析不出再按体积。
+            # 视频不过滤——短视频也可能很小。
+            if ext != ".mp4":
+                dims = None
+                with open(safe_path, "rb") as f:
+                    dims = get_image_dimensions(f.read(32 * 1024))
+                if dims is not None:
+                    if min(dims) < MIN_IMAGE_DIMENSION:
+                        os.remove(safe_path)
+                        _write_skip_marker(filepath, url)
+                        return (
+                            f"  [跳过] {os.path.basename(safe_path)} "
+                            f"尺寸 {dims[0]}x{dims[1]} 过小，判定为装饰图"
+                        )
+                elif os.path.getsize(safe_path) < MIN_IMAGE_BYTES:
                     os.remove(safe_path)
                     _write_skip_marker(filepath, url)
                     return (
-                        f"  [跳过] {os.path.basename(safe_path)} "
-                        f"尺寸 {dims[0]}x{dims[1]} 过小，判定为装饰图"
+                        f"  [跳过] {os.path.basename(safe_path)} 体积过小，判定为装饰图"
                     )
-            elif os.path.getsize(safe_path) < MIN_IMAGE_BYTES:
-                os.remove(safe_path)
-                _write_skip_marker(filepath, url)
-                return f"  [跳过] {os.path.basename(safe_path)} 体积过小，判定为装饰图"
 
-        _clear_skip_marker(filepath)
-        return f"  [成功] -> {os.path.basename(safe_path)}"
-    except Exception as e:
-        return f"  [失败] {os.path.basename(filepath)} 报错: {e}"
+            _clear_skip_marker(filepath)
+            return f"  [成功] -> {os.path.basename(safe_path)}"
+        except Exception as e:
+            # 流式写入中途失败时清理残留文件（含空占位和 partial 写入），
+            # 避免下次重跑被幂等判断误当成"已存在"，产物永久缺一张
+            if safe_path and os.path.exists(safe_path):
+                try:
+                    os.remove(safe_path)
+                except OSError:
+                    pass
+            last_err = e
+            # 仅对瞬时网络错误重试（图床 TLS 瞬断/DNS/超时/连接重置）；
+            # 2026-10 Termux 实测：23img.com 并发握手被 CDN 间歇拒绝，
+            # 单次尝试放弃导致整页大半图片失败
+            if attempt < max_retries and _is_transient_error(e):
+                wait = attempt * 3 + random.uniform(0, 1)
+                logger.warning(
+                    "  [重试 %d/%d] %s 将在 %.1fs 后重试: %s",
+                    attempt,
+                    max_retries,
+                    os.path.basename(filepath),
+                    wait,
+                    e,
+                )
+                time.sleep(wait)
+                continue
+            return f"  [失败] {os.path.basename(filepath)} 报错: {e}"
+    return f"  [失败] {os.path.basename(filepath)} 报错: {last_err}"
 
 
 # 标题中"正文 来自 作者 - 站点"的站点后缀模式（酷安等），用于兜底提取作者
