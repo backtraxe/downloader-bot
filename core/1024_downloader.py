@@ -2,6 +2,7 @@ import glob
 import json
 import os
 import re
+import threading
 import time
 import random
 from urllib.parse import unquote, urlparse
@@ -56,6 +57,10 @@ _DECORATIVE_KEYWORDS = (
 # 正文照片通常 ≥1000px）；解析失败回退体积阈值（正文照片通常远大于 20KB）
 MIN_IMAGE_DIMENSION = 300
 MIN_IMAGE_BYTES = 20 * 1024
+
+# 同一图床（host）的并发下载上限：CDN 会间歇拒绝突发 TLS 握手，按域限流
+# 排队；跨 host 不受影响，总并发仍由 ThreadPoolExecutor(max_workers=5) 管
+_HOST_MAX_CONCURRENCY = 2
 
 
 def _is_decorative_name(filename):
@@ -602,11 +607,24 @@ def extract_general_media(url, force=False) -> DownloadResult:
     download_tasks = build_media_tasks(media_items, base_path)
     downloaded = skipped = failed = filtered = 0
 
+    # 同一图床限流：媒体集中在同一 host 时，5 路并发的突发 TLS 握手会被
+    # CDN 间歇性拒绝（2026-10 Termux 实测 23img.com：约 8 成图片 curl 35
+    # Connection closed abruptly，退避重试也救不回——重试等待期间其他
+    # worker 仍在握手）。按域限 2 路排队、跨 host 仍并行。
+    host_sems = {}
+
+    def _sem_for(u):
+        host = urlparse(u).netloc
+        if host not in host_sems:
+            host_sems[host] = threading.Semaphore(_HOST_MAX_CONCURRENCY)
+        return host_sems[host]
+
+    def _run_task(task):
+        with _sem_for(task[0]):
+            return download_file(session, task[0], task[1], url, force=force)
+
     with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [
-            executor.submit(download_file, session, task[0], task[1], url, force=force)
-            for task in download_tasks
-        ]
+        futures = [executor.submit(_run_task, task) for task in download_tasks]
 
         for future in as_completed(futures):
             result = future.result()

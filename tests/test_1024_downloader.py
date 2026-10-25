@@ -917,3 +917,44 @@ class TestExtractGeneralMediaResult:
         assert "被过滤" in msg
         assert "共 2 项" in msg
         assert "耗时" in msg
+
+
+class TestHostConcurrencyLimit:
+    """同一图床的并发上限：23img.com 等 CDN 会间歇拒绝突发 TLS 握手
+    （curl 35，5 并发时 2026-10 Termux 实测约 8 成图片失败）——
+    同 host 内限流排队，跨 host 仍并行。"""
+
+    def _run(self, monkeypatch, tmp_path, media_items):
+        import threading
+        import time as _time
+
+        lock = threading.Lock()
+        state = {"active": 0, "max": 0}
+
+        def fake_download(session, url, filepath, page_url, force=False):
+            with lock:
+                state["active"] += 1
+                state["max"] = max(state["max"], state["active"])
+            _time.sleep(0.1)
+            with lock:
+                state["active"] -= 1
+            return "  [成功] -> x"
+
+        monkeypatch.setattr(mod, "download_file", fake_download)
+        monkeypatch.setattr(mod, "Session", lambda: _DummySession())
+        monkeypatch.setattr(mod, "fetch_page", lambda *a, **k: _PageResp())
+        monkeypatch.setattr(mod, "build_download_dir", lambda *a, **k: str(tmp_path))
+        monkeypatch.setattr(mod, "collect_media_urls", lambda *a, **k: media_items)
+        result = mod.extract_general_media("http://x/page")
+        assert result.status is DownloadStatus.DOWNLOADED
+        return state["max"]
+
+    def test_same_host_capped(self, monkeypatch, tmp_path):
+        # 同一图床 6 个文件：并发被压到 2 路
+        items = [(f"http://23img.com/{i:03d}.jpg", ".jpg") for i in range(6)]
+        assert self._run(monkeypatch, tmp_path, items) == 2
+
+    def test_different_hosts_still_parallel(self, monkeypatch, tmp_path):
+        # 不同图床的两个文件：不受同域限流约束，可同时进行
+        items = [("http://a.com/001.jpg", ".jpg"), ("http://b.com/002.jpg", ".jpg")]
+        assert self._run(monkeypatch, tmp_path, items) == 2
