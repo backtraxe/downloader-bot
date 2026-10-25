@@ -214,7 +214,7 @@ python -m core.tools.cookie_login xiaohongshu --headed   # 遇滑块/人机校�
 
 **两种使用形态**：不把 Telegram 配置（config.json 的 telegram 段）填上时，仓库就是纯本地命令行下载器；配置后即可用下面两个 Telegram 工具（共用 config.json 的 telegram 段，已 gitignore）。代码也按此分层：下载核心在 `core/`，Telegram 功能在 `telegram/`（仅依赖 core，单向），入口一律 `python -m 模块路径`（如 `python -m core.downloader`、`python -m telegram.bot`），无 shim 文件。
 
-- **`telegram/bot.py` — 聊天闭环机器人（Termux 常驻）**：给 bot 发链接（可带分享文案），自动下载并把产物回传到聊天——图片按 10 张/组发相册，视频发 video，HEIC/原图走文件；caption 自动带 **`#作者` `#站点`** 标签（Telegram 原生可点击、可搜索，方便按作者翻记录）。重复链接提示"已下载过"，超限文件提示跳过。`allowed_users` 白名单外的用户不会消耗你的下载（被拒时会回显其用户 id，方便加白）。下载器返回结构化结果，缺少 Cookie、解析失败、无媒体会分别给出原因，不再把失败误报成"此前已下载过"。**群组**使用需把 bot 设为管理员或经 @BotFather 关闭 Group Privacy，否则它收不到群里的普通消息；**频道**里发链接同样会接力（bot 需为频道管理员，频道消息不做用户白名单——能发帖的只有管理员）
+- **`telegram/bot.py` — 聊天闭环机器人（Termux 常驻）**：给 bot 发链接（可带分享文案），自动下载并把产物回传到聊天——图片与视频混排按 10 个/组发相册（视频笔记的封面与视频本体合成一条消息），HEIC/超标图走文件；caption 自动带 **`#作者` `#站点`** 标签（Telegram 原生可点击、可搜索，方便按作者翻记录）。重复链接提示"已下载过"，超限文件提示跳过。`allowed_users` 白名单外的用户不会消耗你的下载（被拒时会回显其用户 id，方便加白）。下载器返回结构化结果，缺少 Cookie、解析失败、无媒体会分别给出原因，不再把失败误报成"此前已下载过"。**群组**使用需把 bot 设为管理员或经 @BotFather 关闭 Group Privacy，否则它收不到群里的普通消息；**频道**里发链接同样会接力（bot 需为频道管理员，频道消息不做用户白名单——能发帖的只有管理员）
 - **`telegram/upload.py` — 命令行直发**：把本地已有目录/文件传上去（`--document` 原图不压缩，`--caption` 自定义说明，`--config` 指定配置）
 
 **配置步骤**（一次，终身有效）：

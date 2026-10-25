@@ -9,7 +9,7 @@
   3. 填入 config.json 的 telegram 段（首跑自动生成模板与上述指引，已 gitignore）
 
 用法：
-    python -m telegram.upload <文件或目录>            # 目录：图片按 10 张/组发相册
+    python -m telegram.upload <文件或目录>            # 目录：可预览项按 10 个/组发相册（照片+视频混排）
     python -m telegram.upload <目标> --document      # 全部按"文件"发送（原图不压缩）
     python -m telegram.upload <目标> --caption 标题
 
@@ -110,11 +110,18 @@ def collect_media(target):
 
 
 def plan_uploads(files, document=False, size_of=os.path.getsize):
-    """把文件列表规划成操作序列，保序且把连续图片合成相册。
+    """把文件列表规划成操作序列，保序且把可预览项合成相册。
 
+    批次里同时出现照片与视频时（视频笔记的封面 + video.mp4），视频并入
+    相册——sendMediaGroup 支持照片/视频混排，封面与视频合成一条消息；
+    纯视频批次仍逐个 video 操作（caption 独立）。
     返回 [("album",[paths]) / ("video",path) / ("document",path) /
     ("too_big",path)]；document=True 时全部按文件发送（原图不压缩）。
     """
+    # 是否把视频并入相册：批次里有照片（按扩展名）才合并
+    exts = [os.path.splitext(p)[1].lower() for p in files]
+    merge_videos = not document and any(e in _PHOTO_EXTS for e in exts)
+
     ops, album = [], []
 
     def flush():
@@ -122,16 +129,19 @@ def plan_uploads(files, document=False, size_of=os.path.getsize):
             ops.append(("album", list(album)))
             album.clear()
 
-    for path in files:
+    for path, ext in zip(files, exts, strict=True):
         try:
             size = size_of(path)
         except OSError:
             size = 0
-        ext = os.path.splitext(path)[1].lower()
         if size > MAX_UPLOAD_BYTES:
             flush()
             ops.append(("too_big", path))
         elif not document and ext in _PHOTO_EXTS and size <= MAX_PHOTO_BYTES:
+            album.append(path)
+            if len(album) >= ALBUM_SIZE:
+                flush()
+        elif merge_videos and ext in _VIDEO_EXTS:
             album.append(path)
             if len(album) >= ALBUM_SIZE:
                 flush()
@@ -459,21 +469,42 @@ def upload(session, cfg, target, document=False, caption=None, chat_id=None):
                 continue
             if kind == "album":
                 if len(payload) == 1:
-                    call_api(
-                        session,
-                        cfg,
-                        "sendPhoto",
-                        {
-                            "chat_id": chat_id,
-                            "caption": _caption_for(payload[0], caption),
-                        },
-                        {"photo": payload[0]},
-                    )
+                    path = payload[0]
+                    if os.path.splitext(path)[1].lower() in _VIDEO_EXTS:
+                        # 单视频成册（如唯一的照片超限落 document 后）：
+                        # sendMediaGroup 至少 2 项，退化为 sendVideo
+                        call_api(
+                            session,
+                            cfg,
+                            "sendVideo",
+                            {
+                                "chat_id": chat_id,
+                                "caption": _caption_for(path, caption),
+                            },
+                            {"video": path},
+                        )
+                    else:
+                        call_api(
+                            session,
+                            cfg,
+                            "sendPhoto",
+                            {
+                                "chat_id": chat_id,
+                                "caption": _caption_for(path, caption),
+                            },
+                            {"photo": path},
+                        )
                 else:
                     media, files_map = [], {}
                     for i, path in enumerate(payload):
                         attach = f"file{i}"
-                        item = {"type": "photo", "media": f"attach://{attach}"}
+                        # 相册可混排照片与视频（封面 + 视频笔记合成一条消息）
+                        item_type = (
+                            "video"
+                            if os.path.splitext(path)[1].lower() in _VIDEO_EXTS
+                            else "photo"
+                        )
+                        item = {"type": item_type, "media": f"attach://{attach}"}
                         if i == 0 and caption:
                             item["caption"] = caption
                         media.append(item)
@@ -489,7 +520,7 @@ def upload(session, cfg, target, document=False, caption=None, chat_id=None):
                         files_map,
                     )
                 logger.info(
-                    "相册 %d 张已发送：%s…", len(payload), os.path.basename(payload[0])
+                    "相册 %d 项已发送：%s…", len(payload), os.path.basename(payload[0])
                 )
                 sent += len(payload)
             else:

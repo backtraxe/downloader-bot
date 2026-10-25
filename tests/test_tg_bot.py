@@ -222,12 +222,13 @@ class TestHandleMessage:
             download_root=root,
         )
         methods = [m for m, _ in s.sent]
-        # sendMessage(开始) + sendMediaGroup + sendVideo + sendMessage(完成)
+        # sendMessage(开始) + sendMediaGroup(2 图 + 1 视频混排) + sendMessage(完成)
         assert methods.count("sendMediaGroup") == 1
-        assert methods.count("sendVideo") == 1
+        assert methods.count("sendVideo") == 0
         assert methods[0] == "sendMessage" and methods[-1] == "sendMessage"
-        # 相册 caption 带作者与站点标签
+        # 混排相册：图片与视频一条消息，caption 带作者与站点标签
         media = json.loads(s.sent[1][1]["media"])
+        assert [m["type"] for m in media] == ["photo", "photo", "video"]
         assert media[0]["caption"].startswith("#背影 #douyin")
         assert any(r.startswith("完成：3 项已回传") for r in replies)
         # 回传到消息来源聊天，而非配置里的默认 chat_id

@@ -144,7 +144,8 @@ class TestCollectAndPlan:
         ops = plan_uploads(f, document=True)
         assert [k for k, _ in ops] == ["document"]
 
-    def test_interleaved_photos_split_albums(self, tmp_path):
+    def test_photos_and_video_merge_into_one_album(self, tmp_path):
+        # 视频笔记的封面图与 video.mp4 应合成一条相册消息（sendMediaGroup 支持混排）
         files = [
             _touch(tmp_path / "a.jpg"),
             _touch(tmp_path / "b.jpg"),
@@ -152,8 +153,29 @@ class TestCollectAndPlan:
             _touch(tmp_path / "c.jpg"),
         ]
         ops = plan_uploads(files)
-        assert [k for k, _ in ops] == ["album", "video", "album"]
-        assert len(ops[0][1]) == 2 and len(ops[2][1]) == 1
+        assert ops == [("album", files)]
+
+    def test_cover_and_video_merge_into_one_album(self, tmp_path):
+        cover = _touch(tmp_path / "001.jpg")
+        video = _touch(tmp_path / "video.mp4")
+        ops = plan_uploads([cover, video])
+        assert ops == [("album", [cover, video])]
+
+    def test_videos_only_stay_separate(self, tmp_path):
+        # 纯视频批次不合并：仍逐个 video 操作（各自独立 caption）
+        a = _touch(tmp_path / "a.mp4")
+        b = _touch(tmp_path / "b.mp4")
+        ops = plan_uploads([a, b])
+        assert [k for k, _ in ops] == ["video", "video"]
+
+    def test_video_after_document_becomes_lone_album(self, tmp_path):
+        # 唯一的照片超 10MB 落 document 后，视频单独成册（发送时退化为 sendVideo）
+        big = _touch(tmp_path / "big.jpg")
+        v = _touch(tmp_path / "v.mp4")
+        sizes = {big: 11 * 1024 * 1024, v: 1024}
+        ops = plan_uploads([big, v], size_of=sizes.get)
+        assert [k for k, _ in ops] == ["document", "album"]
+        assert ops[1][1] == [v]
 
 
 # ---------------- call_api 重试 ----------------
@@ -232,6 +254,47 @@ class TestUpload:
         sent, _ = upload(s, _CFG, str(tmp_path))
         assert sent == 1
         assert s.calls[0][0].endswith("/sendPhoto")
+
+    def test_cover_and_video_sent_as_single_message(self, tmp_path):
+        # 小红书视频笔记：封面 + video.mp4 合成一条消息，不再拆成两条
+        _touch(tmp_path / "001.jpg")
+        _touch(tmp_path / "video.mp4")
+        s = _Session()
+        sent, skipped = upload(
+            s, _CFG, str(tmp_path), caption="#作者 #xiaohongshu\n标题"
+        )
+        assert sent == 2 and skipped == []
+        assert len(s.calls) == 1
+        url, data, files, _timeout = s.calls[0]
+        assert url.endswith("/sendMediaGroup")
+        media = json.loads(data["media"])
+        assert [m["type"] for m in media] == ["photo", "video"]
+        assert media[0]["caption"] == "#作者 #xiaohongshu\n标题"
+        assert set(files) == {"file0", "file1"}
+
+    def test_live_photo_pairs_merged_into_one_message(self, tmp_path):
+        # 实况照片对儿（001.heic + 001.mp4）：静态帧转 JPEG 预览后与视频
+        # 混排成一条消息，整篇笔记一次发完
+        pillow_heif = pytest.importorskip("pillow_heif")
+        Image = pytest.importorskip("PIL.Image")
+        media_dir = tmp_path / "note"
+        media_dir.mkdir()
+        for i in (1, 2):
+            img = Image.new("RGB", (64, 64), (i * 40, 100, 200))
+            pillow_heif.from_pillow(img).save(media_dir / f"{i:03d}.heic", quality=90)
+            _touch(media_dir / f"{i:03d}.mp4", b"x" * 10)
+        s = _Session()
+        sent, skipped = upload(
+            s, _CFG, str(media_dir), caption="#作者 #xiaohongshu\n标题"
+        )
+        assert sent == 4 and skipped == []
+        assert len(s.calls) == 1
+        url, data, files, _timeout = s.calls[0]
+        assert url.endswith("/sendMediaGroup")
+        media = json.loads(data["media"])
+        assert [m["type"] for m in media] == ["photo", "video", "photo", "video"]
+        assert media[0]["caption"] == "#作者 #xiaohongshu\n标题"
+        assert set(files) == {"file0", "file1", "file2", "file3"}
 
     def test_empty_dir_raises(self, tmp_path):
         with pytest.raises(TgError):
@@ -482,7 +545,10 @@ class TestPrepareMediaIntegration:
         sent, skipped = upload(s, _CFG, str(media_dir))
         assert sent == 2 and skipped == []
         methods = [c[0].rsplit("/", 1)[1] for c in s.calls]
-        assert methods == ["sendPhoto", "sendVideo"]  # 大图被压到 ≤10MB 走 photo
-        photo_path = s.calls[0][2]["photo"]
+        # 大图压到 ≤10MB 后与视频混排成一条相册消息
+        assert methods == ["sendMediaGroup"]
+        media = json.loads(s.calls[0][1]["media"])
+        assert [m["type"] for m in media] == ["photo", "video"]
+        photo_path = s.calls[0][2]["file0"]
         assert str(pre) in photo_path  # 发送的是 tmpdir 里的预览产物
         assert not pre.exists()  # finally 后临时目录被清空

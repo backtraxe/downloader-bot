@@ -26,7 +26,7 @@ core/
   tools/               cookie_import / cookie_check / cookie_login / live_photo
 telegram/
   bot.py               长轮询机器人：链接→下载→回传，caption 带 #作者 #站点
-  upload.py            Bot API 上传：相册、HEIC/大图转码、>50MB 视频压缩
+  upload.py            Bot API 上传：照片+视频混排相册、HEIC/大图转码、>50MB 视频压缩
 tests/                 pytest 单元测试（全部离线）
 ```
 
