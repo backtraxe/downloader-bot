@@ -26,7 +26,13 @@ from .sites import (
     get_site_name,
 )
 from .result import DownloadResult, DownloadStatus
-from .utils import cookie_text_to_header, extract_urls, sanitize_filename, setup_logging
+from .utils import (
+    cookie_text_to_header,
+    extract_urls,
+    request_scope,
+    sanitize_filename,
+    setup_logging,
+)
 from urllib.parse import urljoin, urlparse
 
 logger = setup_logging()
@@ -284,6 +290,12 @@ def dispatch_url(url, force=False):
     其他站点        → 1024_downloader（通用静态网页抓取）
     force=True（--force）时逐层下传，跳过幂等判断强制重下覆盖旧产物。
     """
+    # 同一请求的日志共享 [rNNNN] ID（见 utils.request_scope），便于 grep 排查
+    with request_scope():
+        return _dispatch_url(url, force=force)
+
+
+def _dispatch_url(url, force=False):
     site_name = get_site_name(url)
 
     if site_name == "xiaohongshu":

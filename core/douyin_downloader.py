@@ -40,6 +40,7 @@ from .utils import (
     extract_urls,
     guess_extension,
     is_html_content,
+    request_scope,
     sanitize_filename,
     setup_logging,
     unique_path,
@@ -952,9 +953,11 @@ def main():
             cookie = load_cookie_for_url(target_url)
             if cookie:
                 if is_douyin_note_url(target_url):
-                    download_douyin_note(target_url, cookie_text_to_header(cookie))
+                    with request_scope():
+                        download_douyin_note(target_url, cookie_text_to_header(cookie))
                 else:
-                    download_douyin_video(target_url, cookie_text_to_header(cookie))
+                    with request_scope():
+                        download_douyin_video(target_url, cookie_text_to_header(cookie))
 
 
 if __name__ == "__main__":

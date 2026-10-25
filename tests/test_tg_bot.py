@@ -274,6 +274,35 @@ class TestHandleMessage:
         assert len(videos) == 1
         assert videos[0]["caption"].startswith("#SomeChannel #youtube\nNew Video")
 
+    def test_request_id_shared_across_turn(self, tmp_path, monkeypatch):
+        # bot 单条消息的下载与上传共享同一请求 ID，grep 该 ID 可取整轮轨迹
+        import re
+
+        from core.utils import current_request_id
+
+        root = str(tmp_path / "download")
+        seen = {}
+
+        def dispatch(url):
+            _touch(os.path.join(root, "youtube", "Chan", "v.mp4"))
+            seen["dispatch"] = current_request_id()
+            return DownloadResult(DownloadStatus.DOWNLOADED, "已下载: v")
+
+        def fake_upload(session, cfg, target, **kw):
+            seen["upload"] = current_request_id()
+            return 1, []
+
+        monkeypatch.setattr("telegram.bot.upload", fake_upload)
+        handle_message(
+            _Session(),
+            _CFG,
+            _msg("https://www.youtube.com/watch?v=v"),
+            dispatch=dispatch,
+            download_root=root,
+        )
+        assert re.fullmatch(r"r\d{4}", seen["dispatch"])
+        assert seen["upload"] == seen["dispatch"]
+
     def test_upload_exception_reports_and_continues(self, tmp_path, monkeypatch):
         # upload 抛非 TgError（读盘失败等）也要回显而不是吞掉整条消息的回复
         root = str(tmp_path / "download")

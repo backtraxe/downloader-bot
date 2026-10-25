@@ -33,7 +33,12 @@ from core import http_client
 from core.downloader import dispatch_url
 from core.result import DownloadStatus
 from .upload import TgError, call_api, load_config, upload
-from core.utils import extract_urls, is_partial_download, setup_logging
+from core.utils import (
+    extract_urls,
+    is_partial_download,
+    request_scope,
+    setup_logging,
+)
 
 logger = logging.getLogger("downloader")
 
@@ -238,77 +243,79 @@ def handle_message(
         return replies
 
     for url in urls:
-        say(f"开始下载：{url}")
-        before = snapshot_tree(download_root)
-        try:
-            result = dispatch(url)
-        except Exception as e:  # 下载器内部多已容错，这里兜底
-            logger.exception("下载失败: %s", url)
-            say(f"下载失败：{e}")
-            continue
-        status = getattr(result, "status", None)
-        detail = getattr(result, "message", "") or ""
-        groups = group_new_files(before, download_root)
-        if status == DownloadStatus.FAILED and not groups:
-            say(f"下载失败：{detail or '未知原因'}")
-            continue
-        if status == DownloadStatus.NO_MEDIA and not groups:
-            say(
-                f"没有找到可下载的媒体：{detail}"
-                if detail
-                else "没有找到可下载的媒体。"
+        # 单条链接 = 一个请求：下载与上传日志共享同一 [rNNNN] ID
+        with request_scope():
+            say(f"开始下载：{url}")
+            before = snapshot_tree(download_root)
+            try:
+                result = dispatch(url)
+            except Exception as e:  # 下载器内部多已容错，这里兜底
+                logger.exception("下载失败: %s", url)
+                say(f"下载失败：{e}")
+                continue
+            status = getattr(result, "status", None)
+            detail = getattr(result, "message", "") or ""
+            groups = group_new_files(before, download_root)
+            if status == DownloadStatus.FAILED and not groups:
+                say(f"下载失败：{detail or '未知原因'}")
+                continue
+            if status == DownloadStatus.NO_MEDIA and not groups:
+                say(
+                    f"没有找到可下载的媒体：{detail}"
+                    if detail
+                    else "没有找到可下载的媒体。"
+                )
+                continue
+            if not groups:
+                if status == DownloadStatus.SKIPPED:
+                    say("没有新产物——该内容此前已下载过。")
+                elif status in (DownloadStatus.DOWNLOADED, DownloadStatus.PARTIAL):
+                    say("没有新产物——可能此前已下载过，或产物被过滤。")
+                else:
+                    # 兼容旧的 dispatch 桩/第三方后端：保持原提示
+                    say("没有新产物——该内容此前已下载过。")
+                continue
+            sent_total, skipped_total = 0, 0
+            for group_key, rel_files in groups.items():
+                if group_key and _is_post_dir_group(group_key, rel_files):
+                    targets = [
+                        (
+                            os.path.join(download_root, group_key),
+                            parse_post_meta(group_key, rel_files),
+                        )
+                    ]
+                else:
+                    # 散文件：逐个上传本批新文件，避免把同目录里的旧文件重发
+                    targets = [
+                        (os.path.join(download_root, rel), parse_post_meta("", [rel]))
+                        for rel in rel_files
+                    ]
+                for target, (site, author, title) in targets:
+                    caption = build_caption(site, author, title)
+                    try:
+                        sent, skipped = upload(
+                            session, cfg, target, caption=caption, chat_id=chat_id
+                        )
+                    except TgError as e:
+                        say(f"上传 Telegram 失败：{e}")
+                        continue
+                    except Exception as e:  # noqa: BLE001 读盘/预处理等意外
+                        # 不让单个目标吞掉整条消息的后续回复（完成提示等）
+                        logger.exception("上传失败: %s", target)
+                        say(f"上传失败：{e}")
+                        continue
+                    sent_total += sent
+                    skipped_total += len(skipped)
+                    for path in skipped:
+                        say(f"超 50MB 已跳过（文件在 {path}）")
+            completion = (
+                f"完成：{sent_total} 项已回传。"
+                if not skipped_total
+                else f"完成：{sent_total} 项已回传，{skipped_total} 项超限跳过。"
             )
-            continue
-        if not groups:
-            if status == DownloadStatus.SKIPPED:
-                say("没有新产物——该内容此前已下载过。")
-            elif status in (DownloadStatus.DOWNLOADED, DownloadStatus.PARTIAL):
-                say("没有新产物——可能此前已下载过，或产物被过滤。")
-            else:
-                # 兼容旧的 dispatch 桩/第三方后端：保持原提示
-                say("没有新产物——该内容此前已下载过。")
-            continue
-        sent_total, skipped_total = 0, 0
-        for group_key, rel_files in groups.items():
-            if group_key and _is_post_dir_group(group_key, rel_files):
-                targets = [
-                    (
-                        os.path.join(download_root, group_key),
-                        parse_post_meta(group_key, rel_files),
-                    )
-                ]
-            else:
-                # 散文件：逐个上传本批新文件，避免把同目录里的旧文件重发
-                targets = [
-                    (os.path.join(download_root, rel), parse_post_meta("", [rel]))
-                    for rel in rel_files
-                ]
-            for target, (site, author, title) in targets:
-                caption = build_caption(site, author, title)
-                try:
-                    sent, skipped = upload(
-                        session, cfg, target, caption=caption, chat_id=chat_id
-                    )
-                except TgError as e:
-                    say(f"上传 Telegram 失败：{e}")
-                    continue
-                except Exception as e:  # noqa: BLE001 读盘/预处理等意外
-                    # 不让单个目标吞掉整条消息的后续回复（完成提示等）
-                    logger.exception("上传失败: %s", target)
-                    say(f"上传失败：{e}")
-                    continue
-                sent_total += sent
-                skipped_total += len(skipped)
-                for path in skipped:
-                    say(f"超 50MB 已跳过（文件在 {path}）")
-        completion = (
-            f"完成：{sent_total} 项已回传。"
-            if not skipped_total
-            else f"完成：{sent_total} 项已回传，{skipped_total} 项超限跳过。"
-        )
-        if status in (DownloadStatus.PARTIAL, DownloadStatus.FAILED) and detail:
-            completion = completion.rstrip("。") + f"（{detail}）。"
-        say(completion)
+            if status in (DownloadStatus.PARTIAL, DownloadStatus.FAILED) and detail:
+                completion = completion.rstrip("。") + f"（{detail}）。"
+            say(completion)
     return replies
 
 

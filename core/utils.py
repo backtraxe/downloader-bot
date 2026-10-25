@@ -4,7 +4,9 @@
 
 集中在此以避免各模块各写一份且实现不一致。"""
 
+import contextlib
 import io
+import itertools
 import logging
 import os
 import re
@@ -58,16 +60,63 @@ _URL_TRAILING_CHARS = re.compile(
 )
 
 
+# 请求级日志 ID：一个链接的处理（下载→上传）共享同一 [rNNNN]，
+# grep 该 ID 即可取出完整轨迹。串行请求模型（CLI/bot 均逐条处理）下
+# 模块级全局即可——下载线程池在请求进行中写日志，读到的就是当前 ID。
+_request_counter = itertools.count(1)
+_current_request_id = None
+
+
+def current_request_id():
+    """返回当前活动请求的日志 ID；无活动请求时为 None。"""
+    return _current_request_id
+
+
+@contextlib.contextmanager
+def request_scope():
+    """开启一段请求日志作用域：期间所有日志行带同一 [rNNNN] 前缀。
+
+    已有活动作用域时复用外层 ID（嵌套不换 ID）——bot 的单条消息处理
+    包住 dispatch_url 时，bot 侧日志与下载器日志同属一个请求。
+    """
+    global _current_request_id
+    if _current_request_id is not None:
+        yield _current_request_id
+        return
+    rid = f"r{next(_request_counter):04d}"
+    _current_request_id = rid
+    try:
+        yield rid
+    finally:
+        _current_request_id = None
+
+
+class _RequestIdFilter(logging.Filter):
+    """把当前请求 ID 注入每条日志记录；无活动请求时置空，格式与原来一致。
+
+    挂在 handler 上（不是 logger）——对所有 logger 的记录生效。
+    """
+
+    def filter(self, record):
+        record.reqid = f"[{_current_request_id}] " if _current_request_id else ""
+        return True
+
+
 def setup_logging(level: int = logging.INFO) -> logging.Logger:
-    """配置根日志格式，返回 logger。幂等——重复调用不会叠加 handler。"""
+    """配置根日志格式，返回 logger。幂等——重复调用不会叠加 handler。
+
+    日志行带请求 ID 段（由 _RequestIdFilter 注入）：处理链接期间为
+    [rNNNN]，其余时间为空，grep 该 ID 可串联单个请求的全部日志。
+    """
     root = logging.getLogger()
     # 清理已存在 handler，避免重复调用叠加输出
     for h in list(root.handlers):
         root.removeHandler(h)
     handler = logging.StreamHandler()
+    handler.addFilter(_RequestIdFilter())
     handler.setFormatter(
         logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%H:%M:%S"
+            "%(asctime)s [%(levelname)s] %(reqid)s%(name)s: %(message)s", "%H:%M:%S"
         )
     )
     root.addHandler(handler)

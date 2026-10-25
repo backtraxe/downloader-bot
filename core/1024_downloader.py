@@ -19,6 +19,7 @@ from .utils import (
     guess_extension,
     is_html_content,
     normalize_url,
+    request_scope,
     sanitize_filename,
     setup_logging,
     unique_path,
@@ -630,7 +631,8 @@ def main():
             continue
 
         for target_url in urls:
-            extract_general_media(target_url)
+            with request_scope():
+                extract_general_media(target_url)
 
 
 if __name__ == "__main__":

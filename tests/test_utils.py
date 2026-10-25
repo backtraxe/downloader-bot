@@ -601,3 +601,64 @@ class TestCookieTextToHeader:
 
         assert cookie_text_to_header("") == ""
         assert cookie_text_to_header(None) == ""
+
+
+# ---------------- request_scope（请求级日志 ID） ----------------
+
+
+class TestRequestScope:
+    def test_scope_generates_and_resets(self):
+        import re
+
+        from core.utils import current_request_id, request_scope
+
+        with request_scope() as rid:
+            assert re.fullmatch(r"r\d{4}", rid)
+            assert current_request_id() == rid
+        assert current_request_id() is None
+
+    def test_scopes_have_distinct_ids(self):
+        from core.utils import request_scope
+
+        with request_scope() as a:
+            pass
+        with request_scope() as b:
+            pass
+        assert a != b
+
+    def test_nested_scope_reuses_outer_id(self):
+        # 嵌套（bot 单条消息包住 dispatch_url）不换 ID，整条链路同属一个请求
+        from core.utils import request_scope
+
+        with request_scope() as outer:
+            with request_scope() as inner:
+                assert inner == outer
+        from core.utils import current_request_id
+
+        assert current_request_id() is None
+
+    def test_exception_resets_scope(self):
+        from core.utils import current_request_id, request_scope
+
+        try:
+            with request_scope():
+                raise RuntimeError("boom")
+        except RuntimeError:
+            pass
+        assert current_request_id() is None
+
+    def test_filter_injects_reqid_prefix(self):
+        import logging as _logging
+
+        from core.utils import _RequestIdFilter, request_scope
+
+        f = _RequestIdFilter()
+        with request_scope() as rid:
+            rec = _logging.LogRecord(
+                "downloader", _logging.INFO, "p", 1, "msg", None, None
+            )
+            assert f.filter(rec) is True
+            assert rec.reqid == f"[{rid}] "
+        rec2 = _logging.LogRecord("downloader", _logging.INFO, "p", 1, "m", None, None)
+        f.filter(rec2)
+        assert rec2.reqid == ""  # 无活动请求时日志格式与原来完全一致

@@ -15,6 +15,7 @@ from .utils import (
     extract_urls,
     guess_extension,
     normalize_xhs_state_json,
+    request_scope,
     sanitize_filename,
     setup_logging,
     unique_path,
@@ -660,7 +661,8 @@ def main():
             if site_cookie:
                 site_name = get_site_name(target_url)
                 if site_name == "xiaohongshu":
-                    download_xhs_media(target_url, site_cookie)
+                    with request_scope():
+                        download_xhs_media(target_url, site_cookie)
                 else:
                     logger.warning(
                         "目前还没有编写 %s 的解析代码，仅支持小红书。", site_name

@@ -502,3 +502,23 @@ class TestResolveShortLinkWithRetry:
         out = resolve_short_link_with_retry("https://www.douyin.com/note/123")
         assert out == "https://www.douyin.com/note/123"
         assert calls == []
+
+
+class TestDispatchRequestScope:
+    def test_request_scope_wraps_dispatch(self, monkeypatch):
+        # dispatch_url 处理期间带活动请求 ID，结束后复位
+        import re
+
+        import core.downloader as downloader
+        from core.utils import current_request_id
+
+        seen = {}
+
+        def fake(u, force=False):
+            seen["in"] = current_request_id()
+            return DownloadResult(DownloadStatus.DOWNLOADED, "ok")
+
+        monkeypatch.setattr("core.downloader.download_url", fake)
+        downloader.dispatch_url("https://www.youtube.com/watch?v=abc")
+        assert re.fullmatch(r"r\d{4}", seen["in"])
+        assert current_request_id() is None
