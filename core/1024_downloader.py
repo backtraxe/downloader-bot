@@ -637,7 +637,15 @@ def extract_general_media(url, force=False) -> DownloadResult:
             "未保留任何媒体文件（全部为装饰图或下载失败）：%s",
             os.path.abspath(base_path),
         )
-    logger.info("该网页媒体下载任务完成！（耗时 %.1f 秒）", elapsed)
+    logger.info(
+        "下载完成：%d 新增 / %d 跳过 / %d 失败 / %d 被过滤 / 共 %d 项，耗时 %.1f 秒",
+        downloaded,
+        skipped,
+        failed,
+        filtered,
+        len(download_tasks),
+        elapsed,
+    )
     session.close()
     return result_from_counts(downloaded, skipped, failed, filtered)
 

@@ -885,3 +885,35 @@ class TestExtractGeneralMediaResult:
         result = mod.extract_general_media("http://x/page")
         assert result.status is DownloadStatus.NO_MEDIA
         assert "装饰图" in result.message
+
+    def test_completion_log_includes_counts(self, monkeypatch, tmp_path, caplog):
+        # 收尾日志要带 新增/跳过/失败/被过滤 计数（与 xhs 口径一致）：
+        # 计数只进 DownloadResult 的话，看日志的人不知道总量和成败占比
+        import logging as _logging
+
+        self._patch_common(
+            monkeypatch,
+            tmp_path,
+            [("http://img/1.jpg", ".jpg"), ("http://img/2.jpg", ".jpg")],
+        )
+        (tmp_path / "001.jpg").write_bytes(b"old")
+
+        def fake_download(session, url, filepath, page_url, force=False):
+            if "1.jpg" in url:
+                return "  [跳过] 001.jpg 已存在，无需重复下载"
+            return "  [失败] 002.jpg 报错: x"
+
+        monkeypatch.setattr(mod, "download_file", fake_download)
+        with caplog.at_level(_logging.INFO, logger="downloader"):
+            mod.extract_general_media("http://x/page")
+        summary = [
+            r.getMessage() for r in caplog.records if "下载完成" in r.getMessage()
+        ]
+        assert summary, "收尾日志应包含'下载完成'汇总行"
+        msg = summary[0]
+        assert "0 新增" in msg
+        assert "1 跳过" in msg
+        assert "1 失败" in msg
+        assert "被过滤" in msg
+        assert "共 2 项" in msg
+        assert "耗时" in msg
