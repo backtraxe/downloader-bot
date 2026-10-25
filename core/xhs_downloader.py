@@ -367,6 +367,19 @@ def detect_missing_xsec_token(html, final_url):
     return False
 
 
+def detect_homepage_landing(final_url):
+    """检测落地页是首页而非笔记页（路径无作品 id）。
+
+    失效短链的表现：xhslink 服务把过期短链 307 到 www.xiaohongshu.com
+    （或 /explore），页面 200 正常、无 404/风控文案，noteDetailMap 为空
+    ——极易被误报成"页面结构变更"让用户白等修复。
+    首页路径只有根或 /explore；笔记页路径必带作品 id（/explore/<id>、
+    /discovery/item/<id>、/notes/<id>）。
+    """
+    path = urlparse(final_url or "").path.rstrip("/")
+    return path in ("", "/explore")
+
+
 def _fetch_page(session, url, headers, max_retries=5):
     """请求页面并跟随重定向，对瞬时网络错误自动重试。
     返回 Response 对象；所有重试均失败时返回 None。
@@ -494,6 +507,19 @@ def download_xhs_media(url, cookie, force=False) -> DownloadResult:
     try:
         note_data = data.get("note", {}).get("noteDetailMap", {})
         if not note_data:
+            # 落到首页：失效短链被 307 到首页，页面 200 正常、无 404/风控
+            # 信号——必须先于"页面结构变更"判定，否则用户会白等修复
+            if detect_homepage_landing(response.url if response is not None else ""):
+                logger.error(
+                    "提取失败：分享链接已失效（被重定向到首页，短链会过期）。"
+                    "请在 App 内重新分享该笔记获取新链接。（耗时 %.1f 秒）",
+                    time.time() - start_time,
+                )
+                return DownloadResult(
+                    DownloadStatus.FAILED,
+                    "分享链接已失效（重定向到了首页）——短链会过期，"
+                    "请在 App 内重新分享该笔记获取新链接",
+                )
             logger.error(
                 "提取详情失败，页面结构可能已更新。（耗时 %.1f 秒）",
                 time.time() - start_time,

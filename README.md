@@ -44,6 +44,7 @@ python -m core.downloader
 - 手写解析 `window.__INITIAL_STATE__`，提取图片列表和视频流（比 yt-dlp 对小红书更可控）
 - 支持 `xhslink.com` 短链与 App 分享链接（含 `xsec_token`），脚本会跟随重定向到 `xiaohongshu.com` 后再解析
 - **2026-10 起链接必须带 `xsec_token` 参数**：小红书对裸 `explore/<id>` 链接强制风控（返回 `error_code=300031`「当前笔记暂时无法浏览」落地 404 页——不是笔记被删）。请从浏览器地址栏复制带 `xsec_token` 的一整段链接，或用 App 内"分享"复制的短链（自带 token）；缺 token 时脚本会明确提示而不是误报"笔记已被删除"
+- **分享短链会过期**：失效的 `xhslink.com` 短链会被服务端重定向到小红书首页（页面 200 正常、没有 404，看起来像"解析失败"）。此时脚本会提示"分享链接已失效"，在 App 内重新分享拿新链接即可
 - 需要在 `cookies/xiaohongshu.txt` 中填入浏览器 Cookie；文件不存在或为空时脚本会自动创建并提示
 - 实况照片（live photo）按"静态原图 + 实况视频"同序号配对下载（`001.heic` + `001.mp4`），静态图为 HEIF/JPEG 原图、视频按画质选最高档
 

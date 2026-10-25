@@ -59,7 +59,7 @@ CI（`.github/workflows/ci.yml`）在 Python 3.11–3.13 上跑 pytest + `ruff c
 ## 易踩坑点
 
 - **抖音**：短链先经 `resolve_short_link_with_retry` 展开再判 /note/ 或 /video/；yt-dlp 的 DouyinIE 已被 Argus 风控整拦，不要用于抖音作品下载（/user/ 等非作品链接才兜底 yt-dlp）。Cookie 失效表现为 jsvm 挑战页或 detail API 持续 200 空响应。
-- **小红书**：链接必须带 `xsec_token`；裸 `/explore/<id>` 的 404 是风控而非笔记删除，别误报。
+- **小红书**：链接必须带 `xsec_token`；裸 `/explore/<id>` 的 404 是风控而非笔记删除，别误报。分享短链会过期——失效短链被 307 到首页（200、无 404/风控信号，`noteDetailMap` 为空），由 `detect_homepage_landing` 判定，别报成"页面结构变更"。
 - **UA 固定对齐指纹**：xhs/douyin 用 `_UA150` + chrome150，1024 用 `_UA110` + chrome110。不要改回随机 UA（会 302 到 /login 或触发验证码页）。
 - **通用抓取**：扫描阶段按文件名剔除装饰图，落盘后按短边 <300px 再过滤；`.skip` 标记避免重跑时重复下载图标。
 - **Termux**：`setup_termux.sh` 一键配置；`http_client.py` 的系统 curl 降级路径与短链预展开是为此设计的，改动时别破坏降级语义。

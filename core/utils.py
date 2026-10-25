@@ -17,8 +17,10 @@ try:
 except ImportError:
     _PILImage = None
 
-# 文件名中需要剔除的非法字符（跨平台：路径分隔符 + Windows 保留字符）
-_ILLEGAL_FILENAME_CHARS = re.compile(r'[\\/*?:"<>|\r\n]')
+# 文件名中需要剔除的非法字符（跨平台：路径分隔符 + Windows 保留字符
+# + 控制字符——小红书 desc 等来源会带原始 Tab，控制符留在目录名里会
+# 破坏 shell/传输场景）
+_ILLEGAL_FILENAME_CHARS = re.compile(r"[\x00-\x1f\x7f\\/*?:\"<>|]")
 
 # 常见媒体扩展名白名单，用于从 URL 推断类型
 _EXT_BY_URL = re.compile(

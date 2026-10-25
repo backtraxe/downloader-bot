@@ -110,6 +110,13 @@ class TestSanitizeFilename:
     def test_strips_illegal(self):
         assert sanitize_filename('a:*?"<>|b') == "ab"
 
+    def test_strips_control_chars(self):
+        # 小红书 desc 可含原始 Tab（"标题\t#tag"），目录名不能带控制字符
+        assert sanitize_filename("一朝入乌镇，满眼是江南\t#乌镇") == (
+            "一朝入乌镇，满眼是江南#乌镇"
+        )
+        assert sanitize_filename("a\x00b\x1fc") == "abc"
+
     def test_empty_returns_default(self):
         assert sanitize_filename("") == "untitled"
         assert sanitize_filename("   ") == "untitled"

@@ -814,3 +814,48 @@ class TestCookieRefreshHint:
         assert result.status == DownloadStatus.FAILED
         assert "cookie_login xiaohongshu" in result.message
         assert "cookie_import xiaohongshu" in result.message
+
+
+class TestHomepageLanding:
+    """失效短链：xhslink 把过期短链 307 到首页（200、无 404/风控信号），
+    noteDetailMap 为空——必须报"链接失效"，而不是误导性的"页面结构变更"。"""
+
+    def test_homepage_landing_detected(self):
+        from core.xhs_downloader import detect_homepage_landing
+
+        assert detect_homepage_landing("https://www.xiaohongshu.com/explore") is True
+        assert detect_homepage_landing("https://www.xiaohongshu.com/") is True
+        assert detect_homepage_landing("https://www.xiaohongshu.com") is True
+        # 落在笔记页（路径带作品 id）不算
+        assert (
+            detect_homepage_landing(
+                "https://www.xiaohongshu.com/explore/abc?xsec_token=x"
+            )
+            is False
+        )
+        assert (
+            detect_homepage_landing("https://www.xiaohongshu.com/discovery/item/abc")
+            is False
+        )
+
+    def test_expired_short_link_message(self, monkeypatch):
+        import core.xhs_downloader as xd
+        from core.result import DownloadStatus
+
+        class _Resp:
+            def __init__(self):
+                self.text = (
+                    "<html><head><title>小红书 - 你的生活兴趣社区</title></head>"
+                    "<script>window.__INITIAL_STATE__ = "
+                    '{"note": {"noteDetailMap": {}}}'
+                    " </script></html>"
+                )
+                self.url = "https://www.xiaohongshu.com/explore"
+
+        monkeypatch.setattr(xd, "_fetch_page", lambda *a, **k: _Resp())
+        result = xd.download_xhs_media(
+            "https://xhslink.com/P5nbZf6XOyfAfRw", "web_session=x"
+        )
+        assert result.status == DownloadStatus.FAILED
+        assert "重新分享" in result.message
+        assert "页面结构" not in result.message
