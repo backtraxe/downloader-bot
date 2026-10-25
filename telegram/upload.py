@@ -35,7 +35,7 @@ import time
 
 from core import config as core_config
 from core import http_client
-from core.utils import setup_logging
+from core.utils import is_partial_download, setup_logging
 
 logger = logging.getLogger("downloader")
 
@@ -93,11 +93,15 @@ def load_config(path=None, legacy_path=None):
 
 
 def collect_media(target):
-    """文件或目录 → 排序后的媒体文件列表（只扫一层，忽略隐藏文件）。"""
+    """文件或目录 → 排序后的媒体文件列表（只扫一层，忽略隐藏与下载残留）。"""
     target = os.fspath(target)
     if os.path.isfile(target):
         return [target]
-    names = sorted(n for n in os.listdir(target) if not n.startswith("."))
+    names = sorted(
+        n
+        for n in os.listdir(target)
+        if not n.startswith(".") and not is_partial_download(n)
+    )
     return [
         os.path.join(target, n)
         for n in names
@@ -400,10 +404,13 @@ def prepare_media(files, tmpdir=None):
 def call_api(session, cfg, method, data, files=None, retries=3, _sleep=time.sleep):
     """调 Bot API，返回 result；429 按 retry_after 等待，5xx/网络异常退避。"""
     url = f"{_API_BASE}/bot{cfg['bot_token']}/{method}"
+    # 带文件（媒体上传）给长超时：49MB 在慢上行（Termux 移动网络）下传输
+    # 需数分钟，120s 会把大文件打成必然失败；纯 API 调用维持 120s
+    timeout = 600 if files else 120
     last_err = None
     for attempt in range(1, retries + 1):
         try:
-            r = session.post_files(url, data=data, files=files, timeout=120)
+            r = session.post_files(url, data=data, files=files, timeout=timeout)
             payload = r.json()
         except Exception as e:  # 网络层错误/非 JSON
             last_err = e

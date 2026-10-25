@@ -38,7 +38,7 @@ class _Session:
         self._payloads = list(payloads or [])
 
     def post_files(self, url, data=None, files=None, timeout=None):
-        self.calls.append((url, data or {}, files or {}))
+        self.calls.append((url, data or {}, files or {}, timeout))
         payload = (
             self._payloads.pop(0)
             if self._payloads
@@ -106,6 +106,15 @@ class TestCollectAndPlan:
     def test_collect_single_file(self, tmp_path):
         f = _touch(tmp_path / "a.jpg")
         assert collect_media(f) == [f]
+
+    def test_collect_media_skips_download_residue(self, tmp_path):
+        # 下载中断的 .part / .ytdl 残留不是媒体，不应被上传
+        _touch(tmp_path / "001.jpg")
+        _touch(tmp_path / "video.mp4.part")
+        _touch(tmp_path / "frag.part-Frag0")
+        _touch(tmp_path / "a.mp4.ytdl")
+        files = collect_media(str(tmp_path))
+        assert [os.path.basename(f) for f in files] == ["001.jpg"]
 
     def test_album_chunking_and_order(self, tmp_path):
         files = [_touch(tmp_path / f"{i:03d}.jpg") for i in range(12)]
@@ -186,6 +195,16 @@ class TestCallApi:
         with pytest.raises(TgError):
             call_api(s, _CFG, "sendPhoto", {}, _sleep=lambda x: None)
         assert len(s.calls) == 3
+
+    def test_upload_calls_use_longer_timeout(self, tmp_path):
+        # 带文件（大媒体上传，慢上行下 49MB 需要数分钟）与纯 API 调用分档
+        v = _touch(tmp_path / "v.mp4")
+        s = _Session()
+        call_api(s, _CFG, "sendVideo", {}, files={"video": v}, _sleep=lambda x: None)
+        assert s.calls[0][3] == 600
+        s2 = _Session()
+        call_api(s2, _CFG, "sendMessage", {}, _sleep=lambda x: None)
+        assert s2.calls[0][3] == 120
 
 
 # ---------------- upload 编排 ----------------

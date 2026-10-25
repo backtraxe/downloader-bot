@@ -172,6 +172,15 @@ def is_html_content(content_type: str) -> bool:
     return ct in _HTML_CONTENT_TYPES
 
 
+def is_partial_download(name: str) -> bool:
+    """判断文件名是否为下载中断的残留临时文件。
+
+    yt-dlp 落 `.part` / `.part-Frag*` / `.ytdl`，core 各后端 force 覆盖
+    走 `.part` 临时文件——下载中断时残留，不是完整媒体，上传/回传应跳过。
+    """
+    return name.endswith((".part", ".ytdl")) or ".part-" in name
+
+
 def unique_path(path: str) -> str:
     """对给定路径做原子去重：若已存在，追加 `_1`、`_2`… 后缀。
     通过 os.open(O_CREAT|O_EXCL) 创建占位文件保证并发下不撞名，

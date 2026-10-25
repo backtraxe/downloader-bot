@@ -102,6 +102,14 @@ class TestSnapshotAndMeta:
         before = snapshot_tree(root)
         assert group_new_files(before, root) == {}
 
+    def test_snapshot_skips_part_residue(self, tmp_path):
+        # 下载中断的 .part 残留不算产物：不触发"新文件"，也不该被回传
+        root = str(tmp_path / "download")
+        _touch(os.path.join(root, "youtube", "a.mp4.part"))
+        _touch(os.path.join(root, "youtube", "b.mp4"))
+        groups = group_new_files({}, root)
+        assert groups == {"youtube": [os.path.join("youtube", "b.mp4")]}
+
     def test_parse_post_meta(self):
         assert parse_post_meta(os.path.join("bilibili", "张三", "标题_1"), []) == (
             "bilibili",
@@ -264,6 +272,28 @@ class TestHandleMessage:
         videos = [d for m, d in s.sent if m == "sendVideo"]
         assert len(videos) == 1
         assert videos[0]["caption"].startswith("#SomeChannel #youtube\nNew Video")
+
+    def test_upload_exception_reports_and_continues(self, tmp_path, monkeypatch):
+        # upload 抛非 TgError（读盘失败等）也要回显而不是吞掉整条消息的回复
+        root = str(tmp_path / "download")
+
+        def dispatch(url):
+            _touch(os.path.join(root, "youtube", "Chan", "v.mp4"))
+            return DownloadResult(DownloadStatus.DOWNLOADED, "已下载: v")
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("磁盘读取出错")
+
+        monkeypatch.setattr("telegram.bot.upload", boom)
+        s = _Session()
+        replies = handle_message(
+            s,
+            _CFG,
+            _msg("https://www.youtube.com/watch?v=v"),
+            dispatch=dispatch,
+            download_root=root,
+        )
+        assert any("上传失败" in r for r in replies)
 
     def test_no_new_files_notice(self, tmp_path):
         s = _Session()

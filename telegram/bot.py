@@ -33,7 +33,7 @@ from core import http_client
 from core.downloader import dispatch_url
 from core.result import DownloadStatus
 from .upload import TgError, call_api, load_config, upload
-from core.utils import extract_urls, setup_logging
+from core.utils import extract_urls, is_partial_download, setup_logging
 
 logger = logging.getLogger("downloader")
 
@@ -64,13 +64,17 @@ def build_caption(site, author, title):
 
 
 def snapshot_tree(root=DOWNLOAD_ROOT):
-    """{相对路径: mtime}——下载前后比对拿本批产物。"""
+    """{相对路径: mtime}——下载前后比对拿本批产物。
+
+    跳过隐藏文件（.skip 标记等）与下载中断的 .part/.ytdl 残留——
+    残留不算新产物，否则半截文件会被当媒体回传。
+    """
     snap = {}
     if not os.path.isdir(root):
         return snap
     for dirpath, _dirnames, filenames in os.walk(root):
         for name in filenames:
-            if name.startswith("."):
+            if name.startswith(".") or is_partial_download(name):
                 continue
             p = os.path.join(dirpath, name)
             try:
@@ -287,6 +291,11 @@ def handle_message(
                     )
                 except TgError as e:
                     say(f"上传 Telegram 失败：{e}")
+                    continue
+                except Exception as e:  # noqa: BLE001 读盘/预处理等意外
+                    # 不让单个目标吞掉整条消息的后续回复（完成提示等）
+                    logger.exception("上传失败: %s", target)
+                    say(f"上传失败：{e}")
                     continue
                 sent_total += sent
                 skipped_total += len(skipped)
