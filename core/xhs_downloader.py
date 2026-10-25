@@ -402,6 +402,15 @@ def _fetch_page(session, url, headers, max_retries=5):
     return None
 
 
+# Cookie 失效的用户可执行刷新指引（写进 DownloadResult.message——
+# bot 用户只能看到结果消息，写在日志里的提示到不了聊天窗口）
+_COOKIE_REFRESH_HINT = (
+    "刷新 Cookie：电脑运行 python -m core.tools.cookie_login xiaohongshu；"
+    "手机在浏览器登录后运行 "
+    "termux-clipboard-get | python -m core.tools.cookie_import xiaohongshu"
+)
+
+
 def download_xhs_media(url, cookie, force=False) -> DownloadResult:
     """下载小红书笔记全部媒体（图片/实况/视频），返回 DownloadResult。
     force=True（--force）时强制重下，覆盖已存在的旧产物。"""
@@ -431,7 +440,10 @@ def download_xhs_media(url, cookie, force=False) -> DownloadResult:
             "请在浏览器中打开链接完成验证后重试。（耗时 %.1f 秒）",
             time.time() - start_time,
         )
-        return DownloadResult(DownloadStatus.FAILED, "触发风控拦截或 Cookie 已失效")
+        return DownloadResult(
+            DownloadStatus.FAILED,
+            f"触发风控拦截或 Cookie 已失效。{_COOKIE_REFRESH_HINT}",
+        )
 
     # 缺 xsec_token 检测（必须在 404 判定之前：300031 同样落 404 页，
     # 误报成"笔记被删"会让用户白找链接——笔记其实在架上）

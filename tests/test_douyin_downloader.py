@@ -501,9 +501,14 @@ class TestFetchAwemeDetail:
         assert self._run(monkeypatch, session) == {"aweme_id": "1"}
         assert session.calls == 2
 
-    def test_non_json_exhausted_returns_none(self, monkeypatch):
+    def test_non_json_exhausted_raises_cookie_expired(self, monkeypatch):
+        # 重试全空 = ttwid/sessionid 失效（"旧 Cookie 突然全 200 空"）：
+        # 上抛 _CookieExpiredError 让调用方把刷新指引写进用户可见的失败消息
+        import core.douyin_downloader as dd
+
         session = self._Session([self._resp("")] * 5)
-        assert self._run(monkeypatch, session) is None
+        with pytest.raises(dd._CookieExpiredError):
+            self._run(monkeypatch, session)
         assert session.calls == 3  # 默认重试 3 次
 
     def test_argus_403_not_retried(self, monkeypatch):
@@ -517,6 +522,76 @@ class TestFetchAwemeDetail:
         session = self._Session([self._resp(body)])
         assert self._run(monkeypatch, session) is None
         assert session.calls == 1
+
+
+class TestCookieRefreshHint:
+    """Cookie 失效必须把可执行的刷新指引写进 DownloadResult.message——
+    bot 用户只能看到结果消息，日志里的提示到不了聊天窗口。"""
+
+    _JSVM_HTML = (
+        "<html><head></head><body></body>"
+        "<script>var glb;(glb=x)._$jsvmprt=function(){}</script></html>"
+    )
+
+    class _Resp:
+        def __init__(self, text):
+            self.text = text
+            self.url = "https://www.douyin.com/note/7691296880559540623"
+
+    def _note_result(self, monkeypatch, api_detail):
+        import core.douyin_downloader as dd
+
+        monkeypatch.setattr(
+            dd, "_fetch_page", lambda *a, **k: self._Resp(self._JSVM_HTML)
+        )
+        if isinstance(api_detail, Exception):
+
+            def fake_fetch(*a, **k):
+                raise api_detail
+
+        else:
+            fake_fetch = lambda *a, **k: api_detail  # noqa: E731
+        monkeypatch.setattr(dd, "fetch_aweme_detail", fake_fetch)
+        return dd.download_douyin_note(
+            "https://www.douyin.com/note/7691296880559540623", "ttwid=x"
+        )
+
+    def test_note_jsvm_page_hint(self, monkeypatch):
+        # 笔记页 jsvm 挑战 + API 兜底拿不到详情 → 提示刷新命令
+        from core.result import DownloadStatus
+
+        result = self._note_result(monkeypatch, api_detail=None)
+        assert result.status == DownloadStatus.FAILED
+        assert "cookie_login douyin" in result.message
+        assert "cookie_import douyin" in result.message
+
+    def test_note_api_fallback_cookie_expired_hint(self, monkeypatch):
+        # API 兜底持续 200 空（Cookie 失效的典型形态）→ 明确说 Cookie 已失效
+        from core.result import DownloadStatus
+
+        import core.douyin_downloader as dd
+
+        result = self._note_result(
+            monkeypatch, api_detail=dd._CookieExpiredError("200 非 JSON（0 字节）")
+        )
+        assert result.status == DownloadStatus.FAILED
+        assert "Cookie 已失效" in result.message
+        assert "cookie_login douyin" in result.message
+
+    def test_video_api_cookie_expired_hint(self, monkeypatch):
+        import core.douyin_downloader as dd
+        from core.result import DownloadStatus
+
+        def boom(aweme_id, cookie, session):
+            raise dd._CookieExpiredError("200 非 JSON 响应（0 字节）")
+
+        monkeypatch.setattr(dd, "fetch_aweme_detail", boom)
+        result = dd.download_douyin_video(
+            "https://www.douyin.com/video/7691296880559540623", "ttwid=x"
+        )
+        assert result.status == DownloadStatus.FAILED
+        assert "Cookie 已失效" in result.message
+        assert "cookie_login douyin" in result.message
 
 
 class TestExtractDouyinImageUrlWatermarkFilter:

@@ -793,3 +793,24 @@ class TestDownloadFileForce:
         with open(target, "rb") as f:
             assert f.read() == b"old"
         assert not os.path.exists(target + ".part")
+
+
+class TestCookieRefreshHint:
+    """风控/Cookie 失效的失败消息要带可执行的刷新指引——
+    bot 用户只能看到 DownloadResult.message，日志里的提示到不了聊天窗口。"""
+
+    def test_risk_control_message_has_refresh_hint(self, monkeypatch):
+        import core.xhs_downloader as xd
+        from core.result import DownloadStatus
+
+        class _Resp:
+            text = "请完成验证码后继续访问"  # 命中"验证码"关键词
+            url = "https://www.xiaohongshu.com/explore/abc"
+
+        monkeypatch.setattr(xd, "_fetch_page", lambda *a, **k: _Resp())
+        result = xd.download_xhs_media(
+            "https://www.xiaohongshu.com/explore/abc?xsec_token=x", "web_session=x"
+        )
+        assert result.status == DownloadStatus.FAILED
+        assert "cookie_login xiaohongshu" in result.message
+        assert "cookie_import xiaohongshu" in result.message

@@ -484,6 +484,22 @@ class _NonJsonResponse(RuntimeError):
     """
 
 
+class _CookieExpiredError(RuntimeError):
+    """detail API 持续 2xx 空/非 JSON（重试用尽）——ttwid/sessionid 失效。
+
+    上抛给调用方翻译成带刷新指引的用户可见消息：bot 用户只能看到
+    DownloadResult.message，写在日志里的提示到不了聊天窗口。
+    """
+
+
+# Cookie 失效的用户可执行刷新指引（写进 DownloadResult.message）
+_COOKIE_REFRESH_HINT = (
+    "刷新 Cookie：电脑运行 python -m core.tools.cookie_login douyin；"
+    "手机在浏览器登录抖音后运行 "
+    "termux-clipboard-get | python -m core.tools.cookie_import douyin"
+)
+
+
 def fetch_aweme_detail(aweme_id, cookie, session, max_retries=3):
     """调签名 detail API 取 aweme_detail，成功返回 dict，失败返回 None。
 
@@ -537,13 +553,9 @@ def fetch_aweme_detail(aweme_id, cookie, session, max_retries=3):
                 continue
             logger.error("detail API 请求失败: %s", last_err)
             if isinstance(last_err, _NonJsonResponse):
-                logger.error(
-                    "detail API 持续返回空响应：Cookie 缺有效会话凭据——"
-                    "实测门禁 = UIFID（签名用）+ 有效 ttwid 或 sessionid "
-                    "至少其一，ttwid 过期正是这种形态。请刷新 Cookie："
-                    "手机端 termux-clipboard-get | python -m "
-                    "core.tools.cookie_import douyin"
-                )
+                # 重试用尽仍空响应 = ttwid/sessionid 失效的确定性形态：
+                # 上抛让调用方把刷新指引写进用户可见的失败消息
+                raise _CookieExpiredError(str(last_err)) from last_err
             return None
         status = data.get("status_code")
         detail = data.get("aweme_detail")
@@ -707,7 +719,14 @@ def download_douyin_note(url, cookie, force=False) -> DownloadResult:
         detail = None
         if m:
             logger.warning("笔记页被反爬挑战拦截，改走签名 detail API 兜底...")
-            detail = fetch_aweme_detail(m.group("id"), cookie, session)
+            try:
+                detail = fetch_aweme_detail(m.group("id"), cookie, session)
+            except _CookieExpiredError as e:
+                logger.error("detail API 持续空响应，Cookie 已失效: %s", e)
+                return DownloadResult(
+                    DownloadStatus.FAILED,
+                    f"抖音 Cookie 已失效（详情接口持续空响应）。{_COOKIE_REFRESH_HINT}",
+                )
         if detail is None:
             if captcha_page:
                 logger.error(
@@ -726,7 +745,8 @@ def download_douyin_note(url, cookie, force=False) -> DownloadResult:
                 time.time() - start_time,
             )
             return DownloadResult(
-                DownloadStatus.FAILED, "抖音返回反爬挑战页（Cookie 缺失或失效）"
+                DownloadStatus.FAILED,
+                f"抖音返回反爬挑战页（Cookie 缺失或失效）。{_COOKIE_REFRESH_HINT}",
             )
     else:
         detail = extract_note_detail(html)
@@ -846,7 +866,19 @@ def download_douyin_video(url, cookie, force=False) -> DownloadResult:
 
     session = http_client.Session()
     logger.info("正在请求视频详情: aweme_id=%s", aweme_id)
-    detail = fetch_aweme_detail(aweme_id, cookie, session)
+    try:
+        detail = fetch_aweme_detail(aweme_id, cookie, session)
+    except _CookieExpiredError as e:
+        logger.error(
+            "获取视频详情失败（Cookie 已失效）: %s，耗时 %.1f 秒。",
+            e,
+            time.time() - start_time,
+        )
+        session.close()
+        return DownloadResult(
+            DownloadStatus.FAILED,
+            f"抖音 Cookie 已失效（详情接口持续空响应）。{_COOKIE_REFRESH_HINT}",
+        )
     if detail is None:
         logger.error("获取视频详情失败，耗时 %.1f 秒。", time.time() - start_time)
         session.close()
