@@ -300,7 +300,7 @@ class TestHandleMessage:
             dispatch=dispatch,
             download_root=root,
         )
-        assert re.fullmatch(r"r\d{4}", seen["dispatch"])
+        assert re.fullmatch(r"r[a-z0-9]{4}", seen["dispatch"])
         assert seen["upload"] == seen["dispatch"]
 
     def test_upload_exception_reports_and_continues(self, tmp_path, monkeypatch):

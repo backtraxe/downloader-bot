@@ -520,5 +520,5 @@ class TestDispatchRequestScope:
 
         monkeypatch.setattr("core.downloader.download_url", fake)
         downloader.dispatch_url("https://www.youtube.com/watch?v=abc")
-        assert re.fullmatch(r"r\d{4}", seen["in"])
+        assert re.fullmatch(r"r[a-z0-9]{4}", seen["in"])
         assert current_request_id() is None

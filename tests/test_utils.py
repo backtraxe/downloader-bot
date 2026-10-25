@@ -613,9 +613,20 @@ class TestRequestScope:
         from core.utils import current_request_id, request_scope
 
         with request_scope() as rid:
-            assert re.fullmatch(r"r\d{4}", rid)
+            assert re.fullmatch(r"r[a-z0-9]{4}", rid)
             assert current_request_id() == rid
         assert current_request_id() is None
+
+    def test_id_dedup_within_process(self, monkeypatch):
+        # 随机 ID 进程内查重：撞车重生成，保证同一会话绝不重复
+        import core.utils as u
+
+        monkeypatch.setattr(u, "_used_request_ids", set())
+        seq = iter([list("aaaa"), list("aaaa"), list("bbbb")])
+
+        monkeypatch.setattr(u.random, "choices", lambda pool, k: next(seq))
+        assert u._new_request_id() == "raaaa"
+        assert u._new_request_id() == "rbbbb"  # 第二次撞车后重生成
 
     def test_scopes_have_distinct_ids(self):
         from core.utils import request_scope

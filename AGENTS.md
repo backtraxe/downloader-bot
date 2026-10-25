@@ -72,7 +72,7 @@ CI（`.github/workflows/ci.yml`）在 Python 3.11–3.13 上跑 pytest + `ruff c
 - 文件名冲突用 `unique_path` 原子去重，绝不覆盖已有文件；重复链接已存在即跳过。`--force` 逐层下传（`.part` + `os.replace` 原子替换，yt-dlp 用 `overwrites`）。
 - 并发维持 `max_workers=5`；1024 对**同一图床**再限 2 路握手（`_HOST_MAX_CONCURRENCY`），防 CDN 拒绝突发 TLS 连接。
 - 新增公共函数要附带离线测试（参数化写法见 `tests/test_sites.py`）。
-- 日志按请求带 `[rNNNN]` ID（`utils.request_scope()`）：`dispatch_url`、bot 单条消息循环与各独立 CLI 入口开启；嵌套作用域复用外层 ID，grep 该 ID 可取单个链接从下载到上传的完整轨迹。
+- 日志按请求带随机短 ID（`[rk3f2]` 形态，`utils.request_scope()`）：`dispatch_url`、bot 单条消息循环与各独立 CLI 入口开启；嵌套作用域复用外层 ID，grep 该 ID 可取单个链接从下载到上传的完整轨迹。
 
 ## Cookie
 

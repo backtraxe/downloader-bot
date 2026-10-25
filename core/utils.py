@@ -6,10 +6,11 @@
 
 import contextlib
 import io
-import itertools
 import logging
 import os
+import random
 import re
+import string
 from urllib.parse import urljoin, urlparse
 
 # Pillow 为可选依赖：Termux 上可能没有 wheel（需 pkg install python-pillow 或自行编译），
@@ -60,11 +61,27 @@ _URL_TRAILING_CHARS = re.compile(
 )
 
 
-# 请求级日志 ID：一个链接的处理（下载→上传）共享同一 [rNNNN]，
+# 请求级日志 ID：一个链接的处理（下载→上传）共享同一 [rXXXX]，
 # grep 该 ID 即可取出完整轨迹。串行请求模型（CLI/bot 均逐条处理）下
 # 模块级全局即可——下载线程池在请求进行中写日志，读到的就是当前 ID。
-_request_counter = itertools.count(1)
+# ID 用随机而非递增计数：计数器重启重置，合并多段日志时 r0001 分不清
+# 属于哪次运行；随机 ID 跨重启不撞车，先后顺序由日志时间戳体现。
+_ID_ALPHABET = string.ascii_lowercase + string.digits
+_used_request_ids = set()
 _current_request_id = None
+
+
+def _new_request_id():
+    """生成随机请求 ID（r + 4 位 base36 小写），进程内查重。
+
+    r 前缀保证不会匹配进十六进制笔记/视频 ID（hex 字符集不含 r）；
+    36^4 ≈ 168 万取值空间，撞车重生成即可。
+    """
+    while True:
+        rid = "r" + "".join(random.choices(_ID_ALPHABET, k=4))
+        if rid not in _used_request_ids:
+            _used_request_ids.add(rid)
+            return rid
 
 
 def current_request_id():
@@ -74,7 +91,7 @@ def current_request_id():
 
 @contextlib.contextmanager
 def request_scope():
-    """开启一段请求日志作用域：期间所有日志行带同一 [rNNNN] 前缀。
+    """开启一段请求日志作用域：期间所有日志行带同一 [rXXXX] 前缀。
 
     已有活动作用域时复用外层 ID（嵌套不换 ID）——bot 的单条消息处理
     包住 dispatch_url 时，bot 侧日志与下载器日志同属一个请求。
@@ -83,7 +100,7 @@ def request_scope():
     if _current_request_id is not None:
         yield _current_request_id
         return
-    rid = f"r{next(_request_counter):04d}"
+    rid = _new_request_id()
     _current_request_id = rid
     try:
         yield rid
@@ -106,7 +123,8 @@ def setup_logging(level: int = logging.INFO) -> logging.Logger:
     """配置根日志格式，返回 logger。幂等——重复调用不会叠加 handler。
 
     日志行带请求 ID 段（由 _RequestIdFilter 注入）：处理链接期间为
-    [rNNNN]，其余时间为空，grep 该 ID 可串联单个请求的全部日志。
+    随机短 ID（如 [rk3f2]，跨重启不重置），其余时间为空，grep 该 ID
+    可串联单个请求的全部日志。
     """
     root = logging.getLogger()
     # 清理已存在 handler，避免重复调用叠加输出
