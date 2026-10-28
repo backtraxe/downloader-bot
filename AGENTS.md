@@ -23,7 +23,7 @@ core/
   sites.py             URL→站点名、Cookie 加载（新增站点识别只改这里）
   utils.py             文件名/目录/Cookie 转换等共用函数
   config.py            config.json 加载（兼容旧 telegram.json）
-  tools/               cookie_import / cookie_check / cookie_login / live_photo
+  tools/               cookie_import / cookie_check / cookie_login（需 Playwright）/ live_photo
 telegram/
   bot.py               长轮询机器人：链接→下载→回传，caption 带 #作者 #站点
   upload.py            Bot API 上传：照片+视频混排相册、HEIC/大图转码、>50MB 视频压缩
@@ -42,6 +42,8 @@ python -m core.downloader  # 统一下载入口
 
 CI（`.github/workflows/ci.yml`）在 Python 3.11–3.13 上跑 pytest + `ruff check` + `ruff format --check`，并额外安装 Pillow/pillow-heif。提交前至少跑 pytest 与 ruff。
 
+`ruff.toml` 目标 `py313`，lint 只启用 F/E9/W/B 等 bug 类规则（风格交给 formatter）；`core/douyin_sign/` 三个 vendored 文件整体排除，不要格式化它们。根目录 `conftest.py` 负责引导 `sys.path`，所以裸 `pytest -q` 也可用。
+
 ## 路由与结果契约
 
 `dispatch_url(url, force=False)` 按 `sites.get_site_name` 路由：
@@ -55,6 +57,8 @@ CI（`.github/workflows/ci.yml`）在 Python 3.11–3.13 上跑 pytest + `ruff c
 | 其他任意站点 | `1024_downloader.extract_general_media` |
 
 画质/去水印、重试、风控识别等实现细节写在各模块 docstring 和函数注释里，改代码前先看对应模块。后端统一返回 `core.result.DownloadResult`：`DOWNLOADED` / `PARTIAL` / `SKIPPED` / `FAILED` / `NO_MEDIA`。缺 Cookie、请求或解析失败必须是 `FAILED`，不能把静默失败当成功（`_as_result` 对 None 也判失败）。
+
+`1024_downloader.py` 模块名以数字开头，只能 `importlib.import_module("core.1024_downloader")`，普通 `import` 语法不可用。
 
 ## 易踩坑点
 
@@ -73,6 +77,13 @@ CI（`.github/workflows/ci.yml`）在 Python 3.11–3.13 上跑 pytest + `ruff c
 - 并发维持 `max_workers=5`；1024 对**同一图床**再限 2 路握手（`_HOST_MAX_CONCURRENCY`），防 CDN 拒绝突发 TLS 连接。
 - 新增公共函数要附带离线测试（参数化写法见 `tests/test_sites.py`）。
 - 日志按请求带随机短 ID（`[rk3f2]` 形态，`utils.request_scope()`）：`dispatch_url`、bot 单条消息循环与各独立 CLI 入口开启；嵌套作用域复用外层 ID，grep 该 ID 可取单个链接从下载到上传的完整轨迹。
+
+## Telegram（可选）
+
+- 只有 `telegram/bot.py`、`telegram/upload.py` 读取 `config.json` 的 `telegram` 段；下载核心不依赖配置，未配置时仓库就是纯本地下载器。旧 `telegram.json` 由 `core/config.py` 自动兜底。
+- bot 需要 `bot_token`、`chat_id`、`allowed_users` 白名单；群组需管理员或关闭 Group Privacy，频道需 bot 为管理员（频道消息不做用户白名单）。
+- 上传限制：官方 Bot API 单文件 ≤50MB；照片 >10MB 或 HEIC 会转码/压缩，失败则按文件发送；相册每组最多 10 项（`ALBUM_SIZE`）；>50MB 视频需本机 ffmpeg 压到 ~49MB。
+- `process_message_ttl_seconds`（默认 300，0 关闭）只删过程提示消息，媒体消息永不删。
 
 ## Cookie
 
